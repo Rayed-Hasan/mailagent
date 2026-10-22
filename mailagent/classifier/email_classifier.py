@@ -1,5 +1,5 @@
 """
-Email classifier using Claude API
+Email classifier using provider abstraction
 """
 
 import httpx
@@ -9,14 +9,22 @@ from datetime import datetime
 
 from mailagent.core.types import EmailMessage, EmailCategory, ClassificationResult
 from mailagent.core.config import settings
+from mailagent.llm.base import LLMMessage, LLMProvider
+from mailagent.llm.registry import ProviderRegistry
 
 
 class EmailClassifier:
-    """Classify emails using Claude API"""
+    """Classify emails using configured LLM provider"""
 
-    def __init__(self):
-        self.api_key = settings.anthropic_api_key
-        self.api_url = "https://api.anthropic.com/v1/messages"
+    def __init__(self, provider_registry: Optional[ProviderRegistry] = None):
+        self.provider_registry = provider_registry
+        # Fallback to v1 direct Claude if no registry provided (preserves v1 behavior)
+        if not provider_registry:
+            self.api_key = settings.anthropic_api_key
+            self.api_url = "https://api.anthropic.com/v1/messages"
+        else:
+            self.api_key = None
+            self.api_url = None
 
     async def classify(
         self,
@@ -32,13 +40,26 @@ class EmailClassifier:
         # Create prompt
         prompt = self._create_classification_prompt(email, context)
 
-        # Call Claude API
-        try:
-            response = await self._call_claude(prompt)
-        except (httpx.HTTPError, KeyError, json.JSONDecodeError):
-            # A missing/failed BYOK provider must not block sorting. This
-            # deterministic fallback also keeps bulk test and local demo runs
-            # offline; no credential or email body is logged.
+        # Use provider abstraction if available, otherwise fallback to v1 direct Claude
+        if self.provider_registry:
+            try:
+                response = await self._call_via_provider(prompt)
+            except Exception:
+                # Provider failure should not block sorting
+                return self._fallback_classification(email)
+        else:
+            try:
+                response = await self._call_claude(prompt)
+            except (httpx.HTTPError, KeyError, json.JSONDecodeError):
+                # A missing/failed BYOK provider must not block sorting. This
+                # deterministic fallback also keeps bulk test and local demo runs
+                # offline; no credential or email body is logged.
+                return self._fallback_classification(email)
+
+        # Validate response
+        is_valid, error = self._validate_classification_response(response)
+        if not is_valid:
+            # Malformed response - use fallback
             return self._fallback_classification(email)
 
         # Parse response
@@ -124,15 +145,41 @@ class EmailClassifier:
 
 Categories:
 - meets_reply: The email is a direct reply to a previous message, continuing a conversation
-- FYI: Informational, no action required
-- newsletter: Subscription newsletter or digest
-- promo: Promotional or marketing content
-- received: Automated confirmation or receipt
-- notification: System notification or alert
-- spam: Unsolicited or suspicious content
-- personal: Personal correspondence
-- urgent: Requires immediate attention
-- sensitive: Contains sensitive information (money, legal, medical, HR, compliance)
+- FYI: Informational content that may be useful but requires no immediate action
+- newsletter: Subscription newsletter, digest, or recurring marketing communication
+- promo: Promotional or marketing content with sales, discounts, or offers
+- received: Automated confirmation, receipt, or transaction notification
+- notification: System notification, alert, or automated status update
+- spam: Unsolicited, suspicious, or clearly malicious content
+- personal: Personal correspondence from known contacts
+- urgent: Requires immediate attention or has a time-sensitive deadline
+- sensitive: Contains sensitive information (money, legal, medical, HR, compliance, security)
+
+Classification Guidelines:
+1. If the email contains security alerts, password resets, financial transactions, or calendar invitations, use 'urgent' or 'sensitive'
+2. If the email is clearly promotional with sales/discounts, use 'promo'
+3. If the email is a newsletter or digest with unsubscribe links, use 'newsletter'
+4. If the email is a direct reply in a thread, use 'meets_reply'
+5. If the email is an automated confirmation or receipt, use 'received'
+6. If the email is a system notification that cannot receive replies, use 'notification'
+7. If the email asks a question or requests action, consider 'meets_reply' or 'urgent'
+8. If the email is clearly spam or suspicious, use 'spam'
+9. If the email is personal correspondence, use 'personal'
+10. If the email is informational but not actionable, use 'FYI'
+
+Priority Scoring (0-100):
+- 90-100: Urgent or sensitive requiring immediate attention
+- 70-89: Important action needed soon
+- 50-69: Action needed but not urgent
+- 30-49: Informational, may be useful
+- 10-29: Low priority, likely promotional or automated
+- 0-9: Spam or ignore
+
+Action Determination:
+- reply: Email asks a question or requests a response
+- draft_only: Email may warrant a reply but should be reviewed first
+- archive: No action needed, can be archived
+- flag_human: Requires human review (sensitive, urgent, or ambiguous)
 
 Email Details:
 From: {email.sender}
@@ -144,11 +191,11 @@ Body:
 {context}
 
 Task:
-1. Classify the email into ONE category
-2. Assign a priority score (0-100, where 100 is highest priority)
+1. Classify the email into ONE category from the list above
+2. Assign a priority score (0-100) based on importance and urgency
 3. Determine the best action: reply, draft_only, archive, or flag_human
-4. Provide a brief reason for your decision
-5. Provide your confidence (0.0 to 1.0)
+4. Provide a brief reason for your decision (1-2 sentences)
+5. Provide your confidence (0.0 to 1.0) based on how clear the classification is
 
 Respond in JSON format only:
 {{
@@ -161,6 +208,56 @@ Respond in JSON format only:
 """
 
         return prompt
+
+    async def _call_via_provider(self, prompt: str) -> dict:
+        """Call LLM via provider registry"""
+        provider, model = self.provider_registry.get("classification")
+
+        # Define response schema for classification
+        response_schema = {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "meets_reply",
+                        "FYI",
+                        "newsletter",
+                        "promo",
+                        "received",
+                        "notification",
+                        "spam",
+                        "personal",
+                        "urgent",
+                        "sensitive",
+                    ],
+                },
+                "priority_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "action": {
+                    "type": "string",
+                    "enum": ["reply", "draft_only", "archive", "flag_human"],
+                },
+                "reason": {"type": "string"},
+                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+            "required": ["category", "priority_score", "action", "reason", "confidence"],
+        }
+
+        response = await provider.complete(
+            messages=[LLMMessage(role="user", content=prompt)],
+            model=model,
+            response_schema=response_schema,
+            json_mode=True,
+            max_tokens=1024,
+            timeout_seconds=30,
+        )
+
+        # Parse tool call result (JSON mode returns it in tool_calls)
+        if response.tool_calls:
+            return json.loads(response.tool_calls[0].get("arguments", "{}"))
+        else:
+            # Fallback to parsing text if tool_calls not populated
+            return json.loads(response.text)
 
     async def _call_claude(self, prompt: str) -> dict:
         """Call Claude API directly via HTTP"""
@@ -194,6 +291,54 @@ Respond in JSON format only:
         # Extract content from response
         content = data["content"][0]["text"]
         return json.loads(content)
+
+    def _validate_classification_response(self, response: dict) -> tuple[bool, str]:
+        """Validate classification response structure and values.
+
+        Returns (is_valid, error_message).
+        """
+        required_fields = {"category", "priority_score", "action", "reason", "confidence"}
+        if not all(field in response for field in required_fields):
+            return False, f"Missing required fields: {required_fields - set(response.keys())}"
+
+        # Validate category
+        valid_categories = {
+            "meets_reply",
+            "FYI",
+            "newsletter",
+            "promo",
+            "received",
+            "notification",
+            "spam",
+            "personal",
+            "urgent",
+            "sensitive",
+        }
+        if response["category"] not in valid_categories:
+            return False, f"Invalid category: {response['category']}"
+
+        # Validate priority_score
+        try:
+            priority = int(response["priority_score"])
+            if not (0 <= priority <= 100):
+                return False, f"Priority score out of range: {priority}"
+        except (ValueError, TypeError):
+            return False, f"Invalid priority score: {response['priority_score']}"
+
+        # Validate action
+        valid_actions = {"reply", "draft_only", "archive", "flag_human"}
+        if response["action"] not in valid_actions:
+            return False, f"Invalid action: {response['action']}"
+
+        # Validate confidence
+        try:
+            confidence = float(response["confidence"])
+            if not (0.0 <= confidence <= 1.0):
+                return False, f"Confidence out of range: {confidence}"
+        except (ValueError, TypeError):
+            return False, f"Invalid confidence: {response['confidence']}"
+
+        return True, ""
 
     def _parse_classification_response(self, email_id: str, response: dict) -> ClassificationResult:
         """Parse Claude's response into ClassificationResult"""

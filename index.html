@@ -5,10 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>MailAgent — Your morning, sorted</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
+    <style>
+      .onboarding-dialog{border:0;border-radius:16px;padding:0;max-width:480px;color:#202033}
+      .onboarding-dialog::backdrop{background:#20203399}
+      .onboarding-dialog form{display:grid;gap:14px;padding:28px}
+      .onboarding-dialog h2{font:600 24px "Space Grotesk",sans-serif;margin:0}
+      .onboarding-copy{color:#777;font-size:13px;line-height:1.5;margin:0}
+      .onboarding-dialog label{display:grid;gap:6px;font-size:12px;font-weight:600}
+      .onboarding-dialog select{border:1px solid #ddd;border-radius:8px;padding:9px;background:#fff}
+      .onboarding-check{display:flex!important;grid-template-columns:auto 1fr;align-items:start;font-weight:400!important}
+    </style>
   </head>
   <body>
     <div class="app-shell">
@@ -27,7 +34,7 @@
           <div>
             <p class="eyebrow">YOUR VIRTUAL AGENT</p>
             <h2>Alex is on it</h2>
-            <p class="agent-status"><span></span> Sorting your inbox</p>
+            <p class="agent-status" id="connectionStatus"><span></span> Demo data</p>
           </div>
         </div>
 
@@ -71,23 +78,26 @@
             <h1>Good morning, Jordan <span class="wave">✦</span></h1>
             <p class="hero-subtitle">Alex sorted everything while you slept. Here’s the short version.</p>
           </div>
-          <button class="primary-button" id="reviewButton"><span>✦</span> Review with Alex</button>
+          <div class="hero-actions">
+            <button class="secondary-button" id="connectButton">Connect inbox</button>
+            <button class="primary-button" id="reviewButton"><span>✦</span> Review with Alex</button>
+          </div>
         </section>
 
         <section class="summary-grid" aria-label="Inbox summary">
           <article class="summary-card accent-purple">
             <div class="summary-icon">✦</div>
-            <div><span class="summary-number">24</span><span class="summary-label">emails sorted</span></div>
+          <div><span class="summary-number" id="sortedCount">0</span><span class="summary-label">emails sorted</span></div>
             <span class="card-arrow">↗</span>
           </article>
           <article class="summary-card accent-coral">
             <div class="summary-icon">↗</div>
-            <div><span class="summary-number">6</span><span class="summary-label">replies drafted</span></div>
+            <div><span class="summary-number" id="replyCount">0</span><span class="summary-label">need a reply</span></div>
             <span class="card-arrow">↗</span>
           </article>
           <article class="summary-card accent-amber">
             <div class="summary-icon">◷</div>
-            <div><span class="summary-number">3</span><span class="summary-label">need your call</span></div>
+            <div><span class="summary-number" id="priorityCount">0</span><span class="summary-label">high priority</span></div>
             <span class="card-arrow">↗</span>
           </article>
         </section>
@@ -95,57 +105,39 @@
         <section class="content-grid">
           <div class="mail-column">
             <div class="section-heading">
-              <div><h2>Everything, sorted</h2><p>24 messages from your morning</p></div>
+              <div><h2>Priority inbox</h2><p>Live messages from your connected account</p></div>
               <div class="view-controls"><button class="view-button active">☷</button><button class="view-button">▦</button></div>
             </div>
-            <div class="filter-row">
-              <button class="filter active" data-filter="all">All <span>24</span></button>
-              <button class="filter" data-filter="reply">Reply <span>6</span></button>
-              <button class="filter" data-filter="review">Review <span>3</span></button>
-              <button class="filter" data-filter="later">Read later <span>12</span></button>
+            <div class="filter-row" aria-label="Inbox filters">
+              <label>Priority <select id="priorityFilter"><option value="">Any</option><option value="90">Urgent (90+)</option><option value="70">Important (70+)</option></select></label>
+              <label>Category <select id="categoryFilter"><option value="">All categories</option><option value="meets_reply">Needs reply</option><option value="urgent">Urgent</option><option value="sensitive">Sensitive</option><option value="FYI">FYI</option><option value="newsletter">Newsletter</option><option value="promo">Promotion</option></select></label>
+              <label>Label <input id="labelFilter" type="search" placeholder="e.g. Finance" /></label>
+              <label>Reply <select id="replyFilter"><option value="">Any</option><option value="true">Needs reply</option><option value="false">No reply needed</option></select></label>
+              <label>Sort <select id="sortInbox"><option value="priority">Priority</option><option value="received_at">Newest</option></select></label>
             </div>
 
-            <div class="mail-list" id="mailList">
-              <article class="mail-item" data-category="reply">
-                <div class="mail-check"></div><div class="sender-avatar purple">AC</div>
-                <div class="mail-body"><div class="mail-meta"><strong>Amelia Chen</strong><span>9:42 AM</span></div><h3>Re: Q4 launch timeline</h3><p>Great, Tuesday works on my end. I’ve added a draft reply...</p><div class="mail-tags"><span class="tag reply-tag">✦ Draft ready</span><span class="tag">Work</span></div></div>
-                <button class="more-button">•••</button>
-              </article>
-              <article class="mail-item" data-category="review">
-                <div class="mail-check"></div><div class="sender-avatar orange">MR</div>
-                <div class="mail-body"><div class="mail-meta"><strong>Marcus Rivera</strong><span>9:18 AM</span></div><h3>Quick thought on the new homepage</h3><p>Would love your take before we share this with the team...</p><div class="mail-tags"><span class="tag review-tag">◷ Needs your call</span><span class="tag">Design</span></div></div>
-                <button class="more-button">•••</button>
-              </article>
-              <article class="mail-item" data-category="later">
-                <div class="mail-check"></div><div class="sender-avatar teal">TN</div>
-                <div class="mail-body"><div class="mail-meta"><strong>The New Standard</strong><span>8:55 AM</span></div><h3>This week in ideas: the quiet revolution</h3><p>The stories and signals worth knowing this week...</p><div class="mail-tags"><span class="tag later-tag">↗ Read later</span><span class="tag">Newsletter</span></div></div>
-                <button class="more-button">•••</button>
-              </article>
-              <article class="mail-item" data-category="reply">
-                <div class="mail-check"></div><div class="sender-avatar blue">DK</div>
-                <div class="mail-body"><div class="mail-meta"><strong>David Kim</strong><span>8:24 AM</span></div><h3>Invoice #4821 is ready</h3><p>Attached is the invoice for September consulting hours...</p><div class="mail-tags"><span class="tag reply-tag">✦ Draft ready</span><span class="tag">Finance</span></div></div>
-                <button class="more-button">•••</button>
-              </article>
+            <div class="mail-list" id="mailList" aria-live="polite">
             </div>
-            <button class="load-more">Show all 24 emails <span>↓</span></button>
+            <button class="load-more" id="loadMoreButton" hidden>Load more <span>↓</span></button>
           </div>
+          <dialog id="emailDetail" class="email-detail">
+            <button id="closeDetail" class="detail-close" type="button" aria-label="Close email">×</button>
+            <p class="eyebrow">EMAIL DETAILS</p>
+            <h2 id="detailSubject"></h2>
+            <p class="detail-meta"><strong id="detailSender"></strong> · <span id="detailTimestamp"></span></p>
+            <div class="detail-tags"><span id="detailClassification"></span><span id="detailLabels"></span></div>
+            <pre id="detailBody"></pre>
+          </dialog>
 
           <aside class="focus-column">
             <div class="focus-card">
               <div class="focus-header"><div class="mini-agent">✦</div><div><p class="eyebrow">ALEX'S TAKE</p><h2>Worth your attention</h2></div><span class="sparkle">✧</span></div>
-              <p class="focus-copy">Three emails could use your voice today. I drafted responses for the easy ones and pulled out the decision in the other.</p>
-              <div class="focus-list">
-                <div class="focus-row"><span class="focus-number">01</span><div><strong>Approve the launch timeline</strong><span>Amelia Chen · Draft ready</span></div><span class="focus-arrow">→</span></div>
-                <div class="focus-row"><span class="focus-number">02</span><div><strong>Share your homepage take</strong><span>Marcus Rivera · Needs you</span></div><span class="focus-arrow">→</span></div>
-                <div class="focus-row"><span class="focus-number">03</span><div><strong>Confirm September invoice</strong><span>David Kim · Draft ready</span></div><span class="focus-arrow">→</span></div>
-              </div>
-              <button class="secondary-button" id="openBrief">Open my brief <span>↗</span></button>
+              <p class="focus-copy">Connect your inbox to see live priority context. Open any message to review its classification and labels.</p>
+              <button class="secondary-button" id="openBrief">How priority works <span>↗</span></button>
             </div>
             <div class="activity-card">
               <div class="activity-heading"><div><p class="eyebrow">LIVE ACTIVITY</p><h2>Why Alex did that</h2></div><span class="live-dot"></span></div>
-              <div class="activity-item"><span class="activity-icon purple-icon">✦</span><div><strong>Sorted Amelia into Reply</strong><span>Asked for a timeline · 98% confident</span></div><button class="undo-button">Teach</button></div>
-              <div class="activity-item"><span class="activity-icon amber-icon">◷</span><div><strong>Held Marcus for you</strong><span>Opinion needed · never auto-sent</span></div><button class="undo-button">Why?</button></div>
-              <div class="activity-item"><span class="activity-icon green-icon">✓</span><div><strong>Skipped The New Standard</strong><span>Newsletter · 0 model tokens used</span></div><button class="undo-button">Undo</button></div>
+              <p class="focus-copy">Classification activity will appear here after the connected mailbox is processed.</p>
             </div>
             <div class="quote-card"><span class="quote-mark">“</span><p>Inbox zero is not the goal. Knowing what deserves your attention is.</p><span class="quote-author">— Alex, probably</span></div>
           </aside>
@@ -161,6 +153,24 @@
       </div>
     </div>
     <div class="toast" id="toast" role="status"><span>✦</span> Alex is preparing your morning brief...</div>
+    <dialog id="onboardingDialog" class="onboarding-dialog">
+      <form method="dialog" id="onboardingForm">
+        <p class="eyebrow">FIRST-RUN SETUP</p>
+        <h2>Set up your private workspace</h2>
+        <p class="onboarding-copy">Personal mode stores data in local SQLite and processes scheduled work locally. Email sync and cloud AI still contact the providers you choose.</p>
+        <label>Deployment mode
+          <select id="onboardingMode"><option value="personal">Personal · local-first</option><option value="enterprise">Enterprise · company-managed</option></select>
+        </label>
+        <label>AI mode
+          <select id="onboardingAi"><option value="local">Local model (no AI provider upload)</option><option value="byok">BYOK cloud provider (explicit key)</option></select>
+        </label>
+        <label>Autonomy
+          <select id="onboardingAutonomy"><option value="approve">Approve every send</option><option value="auto_safe">Auto-safe routine replies</option><option value="auto_full">Auto-full (advanced)</option></select>
+        </label>
+        <label class="onboarding-check"><input id="onboardingPrivacy" type="checkbox" required /> I understand which external providers receive data.</label>
+        <button class="primary-button" type="submit">Save preferences</button>
+      </form>
+    </dialog>
     <script src="app.js"></script>
   </body>
 </html>

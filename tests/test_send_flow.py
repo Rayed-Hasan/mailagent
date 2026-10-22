@@ -120,3 +120,51 @@ def test_set_autonomy_mode():
 
     send_flow.set_autonomy_mode(AutonomyMode.AUTO_FULL)
     assert send_flow.autonomy_mode == AutonomyMode.AUTO_FULL
+
+
+@pytest.mark.asyncio
+async def test_duplicate_send_prevention():
+    """Test that duplicate sends are prevented"""
+    send_flow = SendFlow(autonomy_mode=AutonomyMode.AUTO_FULL)
+    draft = Draft(
+        email_id="email_123",
+        classification_id="class_123",
+        content="First reply"
+    )
+
+    # First send should succeed
+    status1, reason1 = await send_flow.process_draft(draft, EmailAction.REPLY)
+    assert status1 == DraftStatus.APPROVED
+
+    # Record as sent
+    send_flow.record_sent("email_123")
+
+    # Second send should be rejected
+    status2, reason2 = await send_flow.process_draft(draft, EmailAction.REPLY)
+    assert status2 == DraftStatus.REJECTED
+    assert "already sent" in reason2.lower()
+
+
+def test_record_and_check_sent():
+    """Test recording and checking sent emails"""
+    send_flow = SendFlow()
+
+    # Initially not sent
+    assert not send_flow.check_already_sent("email_123")
+
+    # Record as sent
+    send_flow.record_sent("email_123")
+
+    # Now should be marked as sent
+    assert send_flow.check_already_sent("email_123")
+
+
+@pytest.mark.asyncio
+async def test_cancel_draft_with_db_no_db():
+    """Test cancel draft without database (fallback to in-memory)"""
+    send_flow = SendFlow(db=None)
+    draft_id = "draft_123"
+
+    result = await send_flow.cancel_draft_with_db(draft_id)
+    assert result is True
+    assert draft_id in send_flow.cancelled_drafts

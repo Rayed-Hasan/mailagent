@@ -1,10 +1,16 @@
-# MailAgent Architecture
+# Mail Agent Architecture
 
 ## Overview
 
-MailAgent v2 is a BYOK autonomous email system. Users bring the AI key and choose
-two model slots: a cheap classification model and a stronger drafting model.
-The application never depends on a MailAgent-paid inference API.
+Mail Agent is a privacy-first, open-source AI email management system. Users bring their own AI keys and choose model slots: a fast classification model and a stronger drafting model. The application never depends on a Mail Agent-paid inference API and is designed to run entirely on user-controlled infrastructure.
+
+## Privacy-First Design Principles
+
+1. **No mandatory Mail Agent infrastructure**: The system can operate without any Mail Agent-hosted services
+2. **Local-first by default**: Personal installations should run with local storage and local credential management
+3. **Storage abstraction**: Application logic is separated from persistence to support multiple backends
+4. **Network transparency**: All external connections are documented and opt-in
+5. **Verifiable privacy**: Data flows are documented and tested to ensure no unexpected transmissions
 
 ## v2 folder structure
 
@@ -118,7 +124,7 @@ then queues and notifies rather than silently failing.
 - Manages provider connections
 
 **Database** (`database.py`)
-- Supabase integration
+- Storage interface with local SQLite and Supabase/PostgreSQL backends
 - Stores emails, classifications, drafts
 - Audit log with full decision trail
 - User voice profiles
@@ -149,11 +155,16 @@ then queues and notifies rather than silently failing.
 
 ### 6. Worker (`mailagent/worker.py`)
 
-**Celery Tasks**
+**Celery Tasks (enterprise option)**
 - Scheduled email processing (every 5 minutes)
 - Voice profile learning (daily)
 - Per-account processing
 - Beat scheduler for periodic tasks
+
+**Local queue (personal option)**
+- APScheduler uses a SQLite job store, so schedules survive process restarts.
+- Jobs can be cancelled individually or cleared by the kill-switch integration.
+- Personal mode does not require Redis or Celery.
 
 ## Data Flow
 

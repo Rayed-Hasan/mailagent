@@ -2,7 +2,7 @@ services:
   - type: worker
     name: mailagent-worker
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: celery -A mailagent.worker worker --loglevel=info --concurrency=2
     envVars:
       - key: ANTHROPIC_API_KEY
@@ -42,7 +42,7 @@ services:
   - type: web
     name: mailagent-dashboard
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ANTHROPIC_API_KEY
@@ -70,11 +70,17 @@ services:
         value: production
       - key: DASHBOARD_PORT
         value: 10000
+      - key: DASHBOARD_API_TOKEN
+        sync: false
+      - key: DASHBOARD_USER_ID
+        sync: false
+      - key: DASHBOARD_ALLOWED_ORIGINS
+        sync: false
 
   - type: pserv
     name: mailagent-beat
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: celery -A mailagent.worker beat --loglevel=info
     envVars:
       - key: ANTHROPIC_API_KEY

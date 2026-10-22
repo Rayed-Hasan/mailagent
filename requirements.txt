@@ -1,8 +1,10 @@
 # Core dependencies
 anthropic>=0.18.0
 supabase>=2.0.0
-celery>=5.3.0
-redis>=5.0.0
+aiosqlite>=0.19.0
+apscheduler>=3.10.0
+SQLAlchemy>=2.0.0
+keyring>=24.0.0
 
 # Email handling
 imap-tools>=0.60.0

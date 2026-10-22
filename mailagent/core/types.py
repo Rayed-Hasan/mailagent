@@ -113,3 +113,16 @@ class RateLimitInfo(BaseModel):
     last_reply_thread_id: Optional[str] = None
     can_send: bool
     reason: Optional[str] = None
+
+
+class EmailLabel(BaseModel):
+    """Email label for categorization"""
+    name: str
+    source: str = "system"  # "system" or "user"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class EmailLabels(BaseModel):
+    """Collection of labels for an email"""
+    email_id: str
+    labels: List[EmailLabel] = Field(default_factory=list)

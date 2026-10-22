@@ -1,6 +1,35 @@
 # Deployment Guide for MailAgent
 
-## Prerequisites
+## Personal local-first deployment
+
+Personal mode needs Python and the external email provider only. It does not
+need Supabase, Redis, Celery, or a Mail Agent account.
+
+```powershell
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Set `STORAGE_BACKEND=sqlite` and `TASK_QUEUE_BACKEND=local`. On Windows,
+`keyring` uses Credential Manager; on macOS it uses Keychain; on Linux it uses
+the configured Secret Service provider. If a keychain is unavailable, set
+`MAILAGENT_ENCRYPTION_KEY` from a protected environment or secret manager.
+Never commit credentials or the encryption key.
+
+## Enterprise deployment
+
+The Supabase/PostgreSQL and Celery/Redis paths remain available for
+company-controlled deployments.
+
+The current application is suitable for a controlled single-principal
+deployment, not a complete multi-tenant enterprise product. It requires
+`DASHBOARD_API_TOKEN` and `DASHBOARD_USER_ID`; authorization is enforced
+server-side for resources owned by that configured principal. Do not expose it
+to multiple employees until an identity provider, tenant model, role-based
+permissions, PostgreSQL retention deletion, and audited administrator workflow
+are implemented.
+
+### Prerequisites
 
 - Render account
 - Supabase account
@@ -37,7 +66,7 @@ services:
   - type: worker
     name: mailagent-worker
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: celery -A mailagent.worker worker --loglevel=info --concurrency=2
     envVars:
       - key: ANTHROPIC_API_KEY
@@ -77,7 +106,7 @@ services:
   - type: web
     name: mailagent-dashboard
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ANTHROPIC_API_KEY
@@ -105,11 +134,17 @@ services:
         value: production
       - key: DASHBOARD_PORT
         value: 10000
+      - key: DASHBOARD_API_TOKEN
+        sync: false
+      - key: DASHBOARD_USER_ID
+        sync: false
+      - key: DASHBOARD_ALLOWED_ORIGINS
+        sync: false
 
   - type: pserv
     name: mailagent-beat
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-enterprise.txt
     startCommand: celery -A mailagent.worker beat --loglevel=info
     envVars:
       - key: ANTHROPIC_API_KEY

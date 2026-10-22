@@ -1,0 +1,15 @@
+{
+  "name": "mailagent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-first desktop wrapper for the local Mail Agent dashboard",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

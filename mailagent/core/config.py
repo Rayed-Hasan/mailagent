@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     environment: Literal["development", "production"] = "development"
     log_level: str = "INFO"
 
+    # Storage backend configuration
+    storage_backend: Literal["supabase", "sqlite"] = "sqlite"
+    sqlite_db_path: str = "mailagent.db"
+
+    # Task queue configuration
+    task_queue_backend: Literal["celery", "local"] = "local"
+    local_queue_db_path: str = "mailagent-queue.db"
+
     # Agent Settings
     max_auto_replies_per_hour: int = 10
     confidence_threshold: float = 0.85
@@ -44,8 +52,13 @@ class Settings(BaseSettings):
     delay_send_seconds: int = 60
 
     # Dashboard
-    dashboard_host: str = "0.0.0.0"
+    # Loopback is the safe personal default. Enterprise deployments should put
+    # the service behind HTTPS and set an explicit bind address.
+    dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8000
+    dashboard_api_token: str = ""
+    dashboard_user_id: str = ""
+    dashboard_allowed_origins: str = ""
 
     class Config:
         env_file = ".env"

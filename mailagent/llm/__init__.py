@@ -7,6 +7,7 @@ from mailagent.llm.base import (
     LLMTool,
     ProviderCapabilities,
 )
+from mailagent.llm.claude_provider import ClaudeProvider
 from mailagent.llm.registry import ProviderRegistry
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "LLMTool",
     "ProviderCapabilities",
     "ProviderRegistry",
+    "ClaudeProvider",
 ]

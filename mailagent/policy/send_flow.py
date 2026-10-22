@@ -4,7 +4,7 @@ Send flow with autonomy modes and delayed send
 
 import asyncio
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from mailagent.core.types import EmailAction, AutonomyMode, DraftStatus, Draft
 from mailagent.core.config import settings
@@ -13,10 +13,12 @@ from mailagent.core.config import settings
 class SendFlow:
     """Handle send flow with autonomy modes and delayed send"""
 
-    def __init__(self, autonomy_mode: AutonomyMode = None):
+    def __init__(self, autonomy_mode: AutonomyMode = None, db=None):
         self.autonomy_mode = autonomy_mode or settings.default_autonomy_mode
         self.delay_seconds = settings.delay_send_seconds
+        self.db = db
         self.cancelled_drafts = set()
+        self.sent_email_ids = set()  # Track emails that have been replied to
 
     async def process_draft(
         self,
@@ -29,6 +31,10 @@ class SendFlow:
         Returns:
             (status, reason)
         """
+
+        # Check for duplicate send (idempotency)
+        if action == EmailAction.REPLY and self.check_already_sent(draft.email_id):
+            return DraftStatus.REJECTED, "Reply already sent for this email"
 
         # If action is flag_human, always flag for human
         if action == EmailAction.FLAG_HUMAN:
@@ -104,29 +110,77 @@ class SendFlow:
         """
 
         # Calculate send time
-        send_time = datetime.utcnow() + timedelta(seconds=self.delay_seconds)
+        send_time = datetime.now(timezone.utc) + timedelta(seconds=self.delay_seconds)
 
-        # In a real implementation, this would schedule a background task
-        # For now, we'll simulate the delay
-        print(f"Scheduling send for {draft.email_id} at {send_time}")
+        # Update draft with scheduled send time
+        draft.scheduled_send_at = send_time
 
-        # Check if cancelled during delay window
+        # If database is available, save the draft with scheduled time
+        if self.db:
+            draft_id = await self.db.save_draft(draft)
+            print(f"Scheduling send for {draft.email_id} at {send_time}, draft_id={draft_id}")
+        else:
+            print(f"Scheduling send for {draft.email_id} at {send_time}")
+
+        # Check if cancelled during delay window (in-memory check)
         if draft.email_id in self.cancelled_drafts:
             return DraftStatus.CANCELLED, "Send cancelled by user"
 
-        # Simulate delay
+        # Check database for cancellation status if available
+        if self.db and hasattr(draft, 'id'):
+            try:
+                draft_data = await self.db.get_draft(draft.id)
+                if draft_data and draft_data.get('status') == DraftStatus.CANCELLED.value:
+                    return DraftStatus.CANCELLED, "Send cancelled by user"
+            except Exception as e:
+                print(f"Error checking draft status: {e}")
+
+        # Simulate delay (in production, this would be a background task)
         await asyncio.sleep(min(self.delay_seconds, 1))  # Cap at 1 second for testing
 
         # Check again if cancelled
         if draft.email_id in self.cancelled_drafts:
             return DraftStatus.CANCELLED, "Send cancelled by user"
 
+        # Check database again for cancellation status
+        if self.db and hasattr(draft, 'id'):
+            try:
+                draft_data = await self.db.get_draft(draft.id)
+                if draft_data and draft_data.get('status') == DraftStatus.CANCELLED.value:
+                    return DraftStatus.CANCELLED, "Send cancelled by user"
+            except Exception as e:
+                print(f"Error checking draft status: {e}")
+
         return DraftStatus.APPROVED, f"Scheduled for send at {send_time}"
 
     def cancel_draft(self, draft_id: str) -> bool:
-        """Cancel a pending draft"""
+        """Cancel a pending draft (in-memory)"""
         self.cancelled_drafts.add(draft_id)
         return True
+
+    async def cancel_draft_with_db(self, draft_id: str) -> bool:
+        """Cancel a pending draft with database persistence"""
+        # Add to in-memory set for immediate effect
+        self.cancelled_drafts.add(draft_id)
+
+        # Update database if available
+        if self.db:
+            try:
+                await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
+                return True
+            except Exception as e:
+                print(f"Error cancelling draft in database: {e}")
+                return False
+
+        return True
+
+    def check_already_sent(self, email_id: str) -> bool:
+        """Check if a reply has already been sent for this email"""
+        return email_id in self.sent_email_ids
+
+    def record_sent(self, email_id: str) -> None:
+        """Record that a reply was sent for this email"""
+        self.sent_email_ids.add(email_id)
 
     def set_autonomy_mode(self, mode: AutonomyMode) -> None:
         """Update autonomy mode"""

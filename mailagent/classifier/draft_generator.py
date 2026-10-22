@@ -8,14 +8,22 @@ from typing import List, Optional
 
 from mailagent.core.types import EmailMessage, UserVoiceProfile, Draft
 from mailagent.core.config import settings
+from mailagent.llm.base import LLMMessage
+from mailagent.llm.registry import ProviderRegistry
 
 
 class DraftGenerator:
-    """Generate email drafts using Claude API with user's voice profile"""
+    """Generate email drafts using configured LLM provider with user's voice profile"""
 
-    def __init__(self):
-        self.api_key = settings.anthropic_api_key
-        self.api_url = "https://api.anthropic.com/v1/messages"
+    def __init__(self, provider_registry: Optional[ProviderRegistry] = None):
+        self.provider_registry = provider_registry
+        # Fallback to v1 direct Claude if no registry provided (preserves v1 behavior)
+        if not provider_registry:
+            self.api_key = settings.anthropic_api_key
+            self.api_url = "https://api.anthropic.com/v1/messages"
+        else:
+            self.api_key = None
+            self.api_url = None
 
     async def generate_draft(
         self,
@@ -32,8 +40,15 @@ class DraftGenerator:
         # Create prompt with voice profile
         prompt = self._create_draft_prompt(email, context, user_guidelines, voice_profile)
 
-        # Call Claude API
-        response = await self._call_claude(prompt)
+        # Use provider abstraction if available, otherwise fallback to v1 direct Claude
+        if self.provider_registry:
+            try:
+                response = await self._call_via_provider(prompt)
+            except Exception:
+                # Provider failure - return empty draft to allow fallback handling
+                return ""
+        else:
+            response = await self._call_claude(prompt)
 
         # Extract draft content
         return response.get("draft", "")
@@ -128,6 +143,35 @@ Respond in JSON format:
 """
 
         return prompt
+
+    async def _call_via_provider(self, prompt: str) -> dict:
+        """Call LLM via provider registry"""
+        provider, model = self.provider_registry.get("drafting")
+
+        # Define response schema for draft generation
+        response_schema = {
+            "type": "object",
+            "properties": {
+                "draft": {"type": "string"},
+            },
+            "required": ["draft"],
+        }
+
+        response = await provider.complete(
+            messages=[LLMMessage(role="user", content=prompt)],
+            model=model,
+            response_schema=response_schema,
+            json_mode=True,
+            max_tokens=2048,
+            timeout_seconds=30,
+        )
+
+        # Parse tool call result (JSON mode returns it in tool_calls)
+        if response.tool_calls:
+            return json.loads(response.tool_calls[0].get("arguments", "{}"))
+        else:
+            # Fallback to parsing text if tool_calls not populated
+            return json.loads(response.text)
 
     async def _call_claude(self, prompt: str) -> dict:
         """Call Claude API directly via HTTP"""

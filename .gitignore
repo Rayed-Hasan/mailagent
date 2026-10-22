@@ -60,3 +60,8 @@ htmlcov/
 # Supabase
 supabase/.branches/
 supabase/.temp/
+
+# Generated reports, graph indexes, and local analysis artifacts
+generate_master_encyclopedia_final.py
+README_COMPREHENSIVE_MASTER.md
+graphify-out/

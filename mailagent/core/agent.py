@@ -11,6 +11,8 @@ from mailagent.core.types import (
     ClassificationResult, Draft, UserVoiceProfile, RateLimitInfo
 )
 from mailagent.core.database import Database
+from mailagent.core.prefilter import Prefilter
+from mailagent.core.label_mapper import LabelMapper
 from mailagent.providers.base import EmailProviderInterface
 from mailagent.providers.gmail_provider import GmailProvider
 from mailagent.providers.imap_provider import IMAPProvider
@@ -22,24 +24,29 @@ from mailagent.policy.send_flow import SendFlow
 from mailagent.policy.safety_rules import SafetyRules
 from mailagent.policy.rate_limiter import RateLimiter
 from mailagent.core.config import settings
+from mailagent.llm.registry import ProviderRegistry, ModelSlot
+from mailagent.llm.claude_provider import ClaudeProvider
 
 
 class EmailAgent:
     """Main email agent that orchestrates all components"""
 
-    def __init__(self, user_id: str, autonomy_mode: AutonomyMode = None):
+    def __init__(self, user_id: str, autonomy_mode: AutonomyMode = None, storage_backend: str = None):
         self.user_id = user_id
         self.autonomy_mode = autonomy_mode or settings.default_autonomy_mode
 
         # Initialize components
-        self.db = Database()
-        self.classifier = EmailClassifier()
+        self.db = Database(storage_backend=storage_backend)
+        self.provider_registry = ProviderRegistry()
+        self.prefilter = Prefilter()
+        self.classifier = EmailClassifier(provider_registry=self.provider_registry)
         self.voice_learner = VoiceProfileLearner()
-        self.draft_generator = DraftGenerator()
+        self.draft_generator = DraftGenerator(provider_registry=self.provider_registry)
         self.worth_sending_policy = WorthSendingPolicy()
-        self.send_flow = SendFlow(self.autonomy_mode)
+        self.send_flow = SendFlow(self.autonomy_mode, db=self.db)
         self.safety_rules = SafetyRules()
         self.rate_limiter = RateLimiter()
+        self.label_mapper = LabelMapper()
 
         # Cache
         self.voice_profile: Optional[UserVoiceProfile] = None
@@ -47,6 +54,9 @@ class EmailAgent:
 
     async def initialize(self):
         """Initialize the agent"""
+        # Initialize storage backend if needed
+        await self.db.initialize()
+
         # Load user voice profile
         profile_data = await self.db.get_voice_profile(self.user_id)
         if profile_data:
@@ -58,10 +68,37 @@ class EmailAgent:
                 common_phrases=profile_data.get("common_phrases", [])
             )
 
+        # Load provider settings and configure registry
+        await self._load_provider_settings()
+
         # Load email accounts
         accounts = await self.db.get_accounts_by_user(self.user_id)
         for account in accounts:
             await self._load_provider(account)
+
+    async def _load_provider_settings(self):
+        """Load LLM provider settings from database and configure registry"""
+        provider_settings = await self.db.get_provider_settings_by_user(self.user_id)
+
+        for setting in provider_settings:
+            provider_name = setting["provider"]
+            api_key = setting["api_key"]
+            model_classification = setting.get("model_classification") or settings.model_classification
+            model_drafting = setting.get("model_drafting") or settings.model_drafting
+
+            # Register provider instance
+            if provider_name == "claude":
+                llm_provider = ClaudeProvider(api_key=api_key)
+                self.provider_registry.register(llm_provider)
+
+                # Configure model slots
+                self.provider_registry.set_slot(
+                    ModelSlot(role="classification", provider="claude", model=model_classification)
+                )
+                self.provider_registry.set_slot(
+                    ModelSlot(role="drafting", provider="claude", model=model_drafting)
+                )
+            # Additional providers (openai, google, ollama) can be added here
 
     async def _load_provider(self, account: dict):
         """Load email provider for an account"""
@@ -114,12 +151,51 @@ class EmailAgent:
         # Save email to database
         email_id = await self.db.save_email(email, account_id)
 
-        # Fetch thread and sender history
-        thread = await provider.fetch_thread(email.thread_id) if email.thread_id else []
-        sender_history = await provider.fetch_sender_history(email.sender_email)
+        # Prefilter: check for bulk/newsletter/important messages
+        # Convert EmailMessage to MailMessage for prefilter
+        from mailagent.mail.base import MailMessage
+        mail_message = MailMessage(
+            message_id=email.message_id,
+            thread_id=email.thread_id,
+            sender=email.sender,
+            sender_email=email.sender_email,
+            recipients=email.recipients,
+            subject=email.subject,
+            text_body=email.body,
+            html_body=None,
+            headers=email.raw_headers,
+            received_at=email.received_at,
+        )
+        prefilter_result = self.prefilter.inspect(mail_message)
 
-        # Classify email
-        classification = await self.classifier.classify(email, thread, sender_history)
+        # Log prefilter decision
+        await self.db.log_audit({
+            "email_id": email_id,
+            "event_type": "prefilter",
+            "context": {
+                "skip_model": prefilter_result.skip_model,
+                "reason_code": prefilter_result.reason_code,
+                "category": prefilter_result.category,
+                "is_important": prefilter_result.is_important,
+            },
+            "reason": prefilter_result.reason,
+        })
+
+        # If prefilter marked as important, skip model but preserve for review
+        # If prefilter marked as bulk, use deterministic classification
+        if prefilter_result.skip_model and not prefilter_result.is_important:
+            # Use deterministic classification based on prefilter category
+            classification = self._deterministic_classification(
+                email_id, prefilter_result.category, prefilter_result.reason
+            )
+        else:
+            # Fetch thread and sender history for classification
+            thread = await provider.fetch_thread(email.thread_id) if email.thread_id else []
+            sender_history = await provider.fetch_sender_history(email.sender_email)
+
+            # Classify email using LLM
+            classification = await self.classifier.classify(email, thread, sender_history)
+
         classification_id = await self.db.save_classification(classification)
 
         # Log classification
@@ -131,7 +207,10 @@ class EmailAgent:
             "action": classification.action,
             "reason": classification.reason,
             "confidence": classification.confidence,
-            "context": {"classifier": "claude"}
+            "context": {
+                "prefilter_skip": prefilter_result.skip_model,
+                "prefilter_reason_code": prefilter_result.reason_code,
+            }
         })
 
         # Check safety rules
@@ -142,6 +221,12 @@ class EmailAgent:
         if should_flag:
             classification.action = EmailAction.FLAG_HUMAN
             classification.reason = safety_reason
+
+        # Apply labels based on classification
+        labels = self.label_mapper.category_to_labels(
+            classification.category, classification.priority_score
+        )
+        await self.db.save_email_labels(email_id, labels, source="system")
 
         # Apply label/folder based on classification
         await self._apply_label_or_folder(provider, email.message_id, classification)
@@ -163,6 +248,33 @@ class EmailAgent:
                 email, classification, email_id, classification_id,
                 account_id, provider, thread, sender_history
             )
+
+    def _deterministic_classification(
+        self, email_id: str, prefilter_category: str, reason: str
+    ) -> ClassificationResult:
+        """Create deterministic classification from prefilter result."""
+        category_map = {
+            "newsletter": EmailCategory.NEWSLETTER,
+            "notification": EmailCategory.NOTIFICATION,
+            "promo": EmailCategory.PROMO,
+        }
+        action_map = {
+            "newsletter": EmailAction.ARCHIVE,
+            "notification": EmailAction.ARCHIVE,
+            "promo": EmailAction.ARCHIVE,
+        }
+
+        category = category_map.get(prefilter_category, EmailCategory.FYI)
+        action = action_map.get(prefilter_category, EmailAction.ARCHIVE)
+
+        return ClassificationResult(
+            email_id=email_id,
+            category=category,
+            priority_score=20,
+            action=action,
+            confidence=0.95,
+            reason=reason,
+        )
 
     async def _apply_label_or_folder(
         self,
@@ -269,6 +381,7 @@ class EmailAgent:
             if await provider.send_reply(provider_draft_id):
                 await self.db.update_draft_status(draft_id, DraftStatus.SENT)
                 self.rate_limiter.record_reply(account_id, email.thread_id)
+                self.send_flow.record_sent(email_id)  # Record for idempotency
                 print(f"Sent reply: {email.subject}")
             else:
                 print(f"Failed to send reply: {email.subject}")

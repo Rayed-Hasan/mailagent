@@ -64,6 +64,72 @@ class TestDemoModeSecurity:
                 assert result == "demo-owner"
 
     @pytest.mark.asyncio
+    async def test_owner_gmail_auth_url_returns_configuration_error_safely(self):
+        with patch.object(settings, "demo_gmail_client_id", ""), \
+             patch.object(settings, "google_client_id", ""), \
+             patch.object(settings, "demo_gmail_client_secret", ""), \
+             patch.object(settings, "google_client_secret", ""):
+            with pytest.raises(HTTPException) as exc:
+                await dashboard.get_owner_gmail_auth_url()
+            assert exc.value.status_code == 400
+            assert "Client ID" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_owner_gmail_auth_url_returns_authorization_url(self):
+        with patch.object(settings, "demo_gmail_client_id", "client-id"), \
+             patch.object(settings, "demo_gmail_client_secret", "client-secret"), \
+             patch.object(settings, "demo_gmail_redirect_uri", "https://demo.invalid/callback"), \
+             patch(
+                 "mailagent.providers.gmail_provider.GmailOAuthFlow.get_authorization_url",
+                 return_value="https://accounts.google.com/o/oauth2/auth",
+             ):
+            result = await dashboard.get_owner_gmail_auth_url()
+            assert result["auth_url"].startswith("https://accounts.google.com/")
+            assert result["redirect_uri"] == "https://demo.invalid/callback"
+            assert result["state"]
+
+    @pytest.mark.asyncio
+    async def test_classified_emails_returns_demo_data(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(dashboard, "db", MagicMock()) as mock_db:
+            mock_db.get_emails_with_classifications = AsyncMock(
+                return_value={"emails": [], "total": 0}
+            )
+            result = await dashboard.get_emails_with_classifications(
+                account_id="demo-account-001",
+                limit=50,
+                offset=0,
+                min_priority=None,
+                max_priority=None,
+                sort_by="priority",
+                request=MagicMock(),
+                user_id="demo-user-judge",
+            )
+            assert result["emails"] == []
+            assert result["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_classified_emails_storage_failure_is_sanitized(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(dashboard, "db", MagicMock()) as mock_db:
+            mock_db.get_emails_with_classifications = AsyncMock(
+                side_effect=RuntimeError("database secret should not escape")
+            )
+            with pytest.raises(HTTPException) as exc:
+                await dashboard.get_emails_with_classifications(
+                    account_id="demo-account-001",
+                    limit=50,
+                    offset=0,
+                    min_priority=None,
+                    max_priority=None,
+                    sort_by="priority",
+                    request=MagicMock(),
+                    user_id="demo-user-judge",
+                )
+            assert exc.value.status_code == 500
+            assert exc.value.detail == "Unable to load classified emails"
+
+    @pytest.mark.asyncio
     async def test_demo_mode_uses_separate_database(self):
         """Test that demo mode uses a separate SQLite database."""
         with patch.object(settings, "public_demo_mode", True):

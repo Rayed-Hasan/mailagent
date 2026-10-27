@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("mailagent.dashboard")
 
@@ -20,7 +20,11 @@ from mailagent.core.config import settings
 from mailagent.dashboard.auth import require_dashboard_auth
 from mailagent.dashboard.rate_limiter import demo_rate_limiter, get_client_ip
 from mailagent.demo.demo_seeder import DemoSeeder
-from mailagent.demo.demo_data import get_demo_user_id, get_demo_account_id
+from mailagent.demo.demo_data import (
+    get_demo_user_id,
+    get_demo_account_id,
+    get_demo_account_email,
+)
 from fastapi import Request
 
 
@@ -394,17 +398,27 @@ async def get_emails_with_classifications(
         ):
             raise HTTPException(status_code=422, detail="min_priority cannot exceed max_priority")
 
-        result = await db.get_emails_with_classifications(
-            account_id=account_id,
-            limit=limit,
-            offset=offset,
-            category=category,
-            min_priority=min_priority,
-            max_priority=max_priority,
-            label=label,
-            needs_reply=needs_reply,
-            sort_by=sort_by,
-        )
+        try:
+            result = await db.get_emails_with_classifications(
+                account_id=account_id,
+                limit=limit,
+                offset=offset,
+                category=category,
+                min_priority=min_priority,
+                max_priority=max_priority,
+                label=label,
+                needs_reply=needs_reply,
+                sort_by=sort_by,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to load classified emails for account_id=%s",
+                account_id,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to load classified emails",
+            ) from None
         return {**result, "limit": limit, "offset": offset, "sort_by": sort_by}
     finally:
         if client_ip:
@@ -917,13 +931,24 @@ async def get_owner_gmail_auth_url():
         if (now - _oauth_states[k]).total_seconds() > 900:
             _oauth_states.pop(k, None)
 
-    auth_url = GmailOAuthFlow.get_authorization_url(
-        client_id=client_id,
-        client_secret=client_secret,
-        redirect_uri=redirect_uri,
-        scopes=DEFAULT_SCOPES,
-        state=state,
-    )
+    try:
+        auth_url = GmailOAuthFlow.get_authorization_url(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            scopes=DEFAULT_SCOPES,
+            state=state,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to generate Gmail OAuth authorization URL for redirect_uri=%s",
+            redirect_uri,
+        )
+        _oauth_states.pop(state, None)
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to initialize Gmail OAuth",
+        ) from None
 
     return {
         "auth_url": auth_url,

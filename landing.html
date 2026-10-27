@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4efe5" />
+    <meta name="description" content="MailAgent is a privacy-first, open-source AI email agent you can run locally." />
+    <title>MailAgent — Own your inbox</title>
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="MailAgent home"><span class="brand-mark">✉</span> MailAgent</a>
+      <nav aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#features">Features</a>
+        <a href="https://github.com/Rayed-Hasan/mailagent" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
+      <a class="header-cta" href="/app/index.html">Open dashboard <span>↗</span></a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">OPEN SOURCE · LOCAL-FIRST · HUMAN-CONTROLLED</p>
+          <h1>Your inbox,<br /><em>under control.</em></h1>
+          <p class="hero-lede">MailAgent reads the noise, finds what deserves your attention, and helps you respond — without handing your mailbox to another platform.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/Rayed-Hasan/mailagent" target="_blank" rel="noreferrer">Download & run locally <span>↗</span></a>
+            <a class="button button-secondary" href="/app/index.html">Open the dashboard <span>→</span></a>
+          </div>
+          <p class="hero-note">MIT licensed · No required MailAgent account · Python 3.11+</p>
+        </div>
+        <div class="hero-art" aria-label="MailAgent dashboard preview">
+          <div class="window-bar"><span></span><span></span><span></span><b>mailagent / priority-inbox</b></div>
+          <div class="preview-content">
+            <div class="preview-sidebar"><strong>✉ MailAgent</strong><small>PRIVATE AGENT</small><div class="preview-active">⌁ Inbox <b>24</b></div><div>✎ Drafts</div><div>↗ Sent</div><div>▱ Archive</div></div>
+            <div class="preview-main"><small>LIVE PRIORITY INBOX</small><h2>Good morning.<br /><mark>Here is what matters.</mark></h2><div class="preview-stats"><span><b>24</b><small>sorted</small></span><span><b>6</b><small>need a reply</small></span><span><b>3</b><small>high priority</small></span></div><div class="preview-email"><i></i><div><b>Quarterly review — action needed</b><small>Priority 92 · Needs reply</small></div><strong>OPEN</strong></div><div class="preview-email"><i class="green"></i><div><b>Your weekly product digest</b><small>Newsletter · Read later</small></div><strong>OPEN</strong></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="trust-strip" aria-label="Product principles">
+        <span><b>01</b> Your data stays yours</span><span><b>02</b> Every action is auditable</span><span><b>03</b> Nothing sends without your rules</span><span><b>04</b> Bring your own AI provider</span>
+      </section>
+
+      <section class="intro section-width" id="how-it-works">
+        <div><p class="eyebrow">THE SHORT VERSION</p><h2>Less inbox triage.<br /><span>More actual work.</span></h2></div>
+        <p>MailAgent classifies email by priority, filters out noise, and drafts responses locally. You choose the provider, the autonomy level, and the moment anything can be sent.</p>
+      </section>
+
+      <section class="feature-grid section-width" id="features">
+        <article class="feature-card feature-purple"><span class="feature-number">01</span><h3>See what matters first</h3><p>Priority scoring, confidence-aware classification, server-side filters, labels, and pagination turn a crowded mailbox into a focused queue.</p><a href="/app/index.html">Explore priority inbox →</a></article>
+        <article class="feature-card feature-coral"><span class="feature-number">02</span><h3>Draft, don’t blindly send</h3><p>MailAgent learns your voice and generates drafts, but approval stays with you. Undo windows, idempotency guards, and rate limits protect every send.</p><a href="#privacy">Understand the controls →</a></article>
+        <article class="feature-card feature-amber"><span class="feature-number">03</span><h3>Run it where you choose</h3><p>Personal mode uses local SQLite and an in-process queue. Connect Gmail or IMAP, use Ollama locally, or bring a cloud key when you explicitly want one.</p><a href="https://github.com/Rayed-Hasan/mailagent#personal-mode-installation-local-no-cloud" target="_blank" rel="noreferrer">Read the setup guide →</a></article>
+      </section>
+
+      <section class="privacy section-width" id="privacy">
+        <div class="privacy-copy"><p class="eyebrow">PRIVACY PROMISE</p><h2>Your mailbox is not our business.</h2><p>There is no mandatory MailAgent-hosted backend, central account, telemetry, or analytics. In personal mode, your data stays in local storage and only reaches services you configure.</p><a class="button button-primary" href="https://github.com/Rayed-Hasan/mailagent/blob/main/README.md#privacy-promise" target="_blank" rel="noreferrer">Read the full promise <span>↗</span></a></div>
+        <div class="privacy-list"><div><b>LOCAL BY DEFAULT</b><span>SQLite storage and a local task queue. No cloud dependency required.</span></div><div><b>ENCRYPTED SECRETS</b><span>Credentials and AI keys are encrypted with AES-256-GCM and can use your OS keychain.</span></div><div><b>EXPLICIT CLOUD AI</b><span>Only the content required for inference is sent to the provider you select with your own key.</span></div><div><b>EMERGENCY STOP</b><span>A built-in kill switch blocks autonomous sending instantly.</span></div></div>
+      </section>
+
+      <section class="install section-width">
+        <div><p class="eyebrow">YOUR MACHINE. YOUR RULES.</p><h2>Install it in a few commands.</h2><p>Clone the repository, install the dependencies, configure your encryption key, and start the dashboard on loopback. No hosted account required.</p><a href="https://github.com/Rayed-Hasan/mailagent" target="_blank" rel="noreferrer">View source on GitHub ↗</a></div>
+        <pre><code><span># get the source</span>
+git clone https://github.com/Rayed-Hasan/mailagent.git
+cd mailagent
+
+<span># install and start locally</span>
+python -m venv .venv
+pip install -r requirements.txt
+python -m uvicorn mailagent.dashboard.app:app \
+  --host 127.0.0.1 --port 8765</code></pre>
+      </section>
+    </main>
+
+    <footer class="site-footer section-width"><a class="brand" href="/"><span class="brand-mark">✉</span> MailAgent</a><p>Privacy-first email automation you can inspect, control, and run yourself.</p><div><a href="https://github.com/Rayed-Hasan/mailagent/blob/main/LICENSE" target="_blank" rel="noreferrer">MIT License</a><a href="https://github.com/Rayed-Hasan/mailagent#known-limitations" target="_blank" rel="noreferrer">Known limitations</a><a href="/app/index.html">Dashboard</a></div></footer>
+  </body>
+</html>

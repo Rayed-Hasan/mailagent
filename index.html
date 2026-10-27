@@ -3,24 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f7fb" />
-    <title>MailAgent — Your morning, sorted</title>
+    <meta name="theme-color" content="#f4efe5" />
+    <title>MailAgent — Private email, sorted</title>
     <link rel="stylesheet" href="styles.css" />
-    <style>
-      .onboarding-dialog{border:0;border-radius:16px;padding:0;max-width:480px;color:#202033}
-      .onboarding-dialog::backdrop{background:#20203399}
-      .onboarding-dialog form{display:grid;gap:14px;padding:28px}
-      .onboarding-dialog h2{font:600 24px "Space Grotesk",sans-serif;margin:0}
-      .onboarding-copy{color:#777;font-size:13px;line-height:1.5;margin:0}
-      .onboarding-dialog label{display:grid;gap:6px;font-size:12px;font-weight:600}
-      .onboarding-dialog select{border:1px solid #ddd;border-radius:8px;padding:9px;background:#fff}
-      .onboarding-check{display:flex!important;grid-template-columns:auto 1fr;align-items:start;font-weight:400!important}
-    </style>
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
-        <a class="brand" href="#" aria-label="MailAgent home">
+        <a class="brand" href="/" aria-label="MailAgent home">
           <span class="brand-mark"><span></span><span></span><span></span></span>
           <span>MailAgent</span>
         </a>
@@ -32,9 +22,9 @@
             <span class="spark spark-two">✦</span>
           </div>
           <div>
-            <p class="eyebrow">YOUR VIRTUAL AGENT</p>
-            <h2>Alex is on it</h2>
-            <p class="agent-status" id="connectionStatus"><span></span> Demo data</p>
+            <p class="eyebrow">YOUR PRIVATE AGENT</p>
+            <h2>MailAgent is ready</h2>
+            <p class="agent-status" id="connectionStatus"><span></span> Connecting...</p>
           </div>
         </div>
 
@@ -62,7 +52,7 @@
 
       <main class="main-content" id="inbox">
         <header class="topbar">
-          <div class="breadcrumb"><span>Inbox</span><span class="slash">/</span><strong>All mail</strong></div>
+          <div class="breadcrumb"><span>MailAgent</span><span class="slash">/</span><strong>Priority inbox</strong></div>
           <div class="topbar-actions">
             <button class="mode-pill" id="modeButton"><span></span> Approve mode</button>
             <div class="usage-chip" title="Your BYOK usage today"><span class="usage-bar"><i></i></span><span>1.8k tokens</span></div>
@@ -74,13 +64,13 @@
 
         <section class="hero">
           <div>
-            <p class="date-line">FRIDAY, OCTOBER 16, 2026 <span class="weather">☼ 72°</span></p>
-            <h1>Good morning, Jordan <span class="wave">✦</span></h1>
-            <p class="hero-subtitle">Alex sorted everything while you slept. Here’s the short version.</p>
+            <p class="date-line"><time id="currentDateTime" datetime="">Loading current time…</time></p>
+            <h1>Your inbox, under control <span class="wave">✦</span></h1>
+            <p class="hero-subtitle">MailAgent classifies the noise so you can focus on what deserves a reply.</p>
           </div>
           <div class="hero-actions">
             <button class="secondary-button" id="connectButton">Connect inbox</button>
-            <button class="primary-button" id="reviewButton"><span>✦</span> Review with Alex</button>
+            <button class="primary-button" id="reviewButton"><span>✦</span> Review priority mail</button>
           </div>
         </section>
 
@@ -131,15 +121,15 @@
 
           <aside class="focus-column">
             <div class="focus-card">
-              <div class="focus-header"><div class="mini-agent">✦</div><div><p class="eyebrow">ALEX'S TAKE</p><h2>Worth your attention</h2></div><span class="sparkle">✧</span></div>
+              <div class="focus-header"><div class="mini-agent">✦</div><div><p class="eyebrow">MAILAGENT'S TAKE</p><h2>Worth your attention</h2></div><span class="sparkle">✧</span></div>
               <p class="focus-copy">Connect your inbox to see live priority context. Open any message to review its classification and labels.</p>
               <button class="secondary-button" id="openBrief">How priority works <span>↗</span></button>
             </div>
             <div class="activity-card">
-              <div class="activity-heading"><div><p class="eyebrow">LIVE ACTIVITY</p><h2>Why Alex did that</h2></div><span class="live-dot"></span></div>
+              <div class="activity-heading"><div><p class="eyebrow">LIVE ACTIVITY</p><h2>Why it was sorted</h2></div><span class="live-dot"></span></div>
               <p class="focus-copy">Classification activity will appear here after the connected mailbox is processed.</p>
             </div>
-            <div class="quote-card"><span class="quote-mark">“</span><p>Inbox zero is not the goal. Knowing what deserves your attention is.</p><span class="quote-author">— Alex, probably</span></div>
+            <div class="quote-card"><span class="quote-mark">“</span><p>Inbox zero is not the goal. Knowing what deserves your attention is.</p><span class="quote-author">— MailAgent principle</span></div>
           </aside>
         </section>
       </main>
@@ -147,12 +137,12 @@
     <div class="command-palette" id="commandPalette" aria-hidden="true">
       <div class="palette-backdrop"></div>
       <div class="palette-panel" role="dialog" aria-label="Command palette">
-        <div class="palette-search"><span>⌕</span><input id="paletteInput" placeholder="Search mail or ask Alex..." autofocus /><kbd>ESC</kbd></div>
-        <div class="palette-actions"><button>✦ Ask Alex <small>“What needs me today?”</small></button><button>☷ Open priority inbox <small>⌘ P</small></button><button>⚙ Open settings <small>BYOK & autonomy</small></button></div>
+        <div class="palette-search"><span>⌕</span><input id="paletteInput" placeholder="Search mail or ask MailAgent..." autofocus /><kbd>ESC</kbd></div>
+        <div class="palette-actions"><button>✦ Ask MailAgent <small>“What needs me today?”</small></button><button>☷ Open priority inbox <small>⌘ P</small></button><button>⚙ Open settings <small>BYOK & autonomy</small></button></div>
         <p class="palette-hint">Press <kbd>⌘ K</kbd> anytime to search, act, or ask why.</p>
       </div>
     </div>
-    <div class="toast" id="toast" role="status"><span>✦</span> Alex is preparing your morning brief...</div>
+    <div class="toast" id="toast" role="status"><span>✦</span> MailAgent is preparing your morning brief...</div>
     <dialog id="onboardingDialog" class="onboarding-dialog">
       <form method="dialog" id="onboardingForm">
         <p class="eyebrow">FIRST-RUN SETUP</p>

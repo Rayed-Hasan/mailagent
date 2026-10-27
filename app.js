@@ -14,13 +14,41 @@ const apiConfig = {
     || sessionStorage.getItem("mailagent.dashboardToken") || "",
 };
 
-const inboxState = { accountId: null, offset: 0, total: 0, loading: false };
+const inboxState = { accountId: null, offset: 0, total: 0, loading: false, isDemoMode: false };
 
 function setConnectionStatus(message, connected = false) {
   connectionStatus.replaceChildren();
   const indicator = document.createElement("span");
   connectionStatus.append(indicator, document.createTextNode(` ${message}`));
   connectionStatus.classList.toggle("connected", connected);
+}
+
+async function checkDemoMode() {
+  // Check if we're in demo mode by querying the demo status endpoint
+  if (!apiConfig.baseUrl) {
+    // If no base URL configured, use current origin
+    apiConfig.baseUrl = window.location.origin;
+  }
+
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/demo/status`);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.demo_mode) {
+        inboxState.isDemoMode = true;
+        inboxState.accountId = data.demo_account_id;
+        setConnectionStatus("Demo mode active - synthetic data", true);
+        // Hide connect button in demo mode
+        if (connectButton) connectButton.style.display = "none";
+        return true;
+      }
+    }
+  } catch (error) {
+    // Not in demo mode or endpoint not available
+    console.log("Not in demo mode or demo endpoint not accessible");
+  }
+
+  return false;
 }
 
 function setMailListState(message, isError = false) {
@@ -46,6 +74,25 @@ function formatDate(value) {
     ? "Unknown time"
     : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
+
+function updateCurrentDateTime() {
+  const dateTime = document.querySelector("#currentDateTime");
+  if (!dateTime) return;
+
+  const now = new Date();
+  dateTime.dateTime = now.toISOString();
+  dateTime.textContent = new Intl.DateTimeFormat([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(now).toUpperCase();
+}
+
+updateCurrentDateTime();
+window.setInterval(updateCurrentDateTime, 60_000);
 
 function classificationFor(email) {
   return email.classification || {};
@@ -158,19 +205,21 @@ function queryParams() {
 }
 
 async function fetchInbox(append = false) {
-  if (!apiConfig.baseUrl || !apiConfig.token) {
+  // In demo mode, don't require token
+  if (!inboxState.isDemoMode && (!apiConfig.baseUrl || !apiConfig.token)) {
     setConnectionStatus("Connect an inbox to begin");
     setMailListState("Connect your inbox to load real messages.");
     return false;
   }
   if (inboxState.loading) return false;
   inboxState.loading = true;
-  setConnectionStatus("Loading connected inbox");
+  setConnectionStatus(inboxState.isDemoMode ? "Loading demo inbox" : "Loading connected inbox");
   if (!append) setMailListState("Loading messages...");
   try {
     if (!inboxState.accountId) {
+      const headers = inboxState.isDemoMode ? {} : { Authorization: `Bearer ${apiConfig.token}` };
       const accountsResponse = await fetch(`${apiConfig.baseUrl}/api/accounts`, {
-        headers: { Authorization: `Bearer ${apiConfig.token}` },
+        headers,
       });
       if (!accountsResponse.ok) throw new Error(accountsResponse.status === 401 ? "Authentication failed" : "Could not load accounts");
       const accounts = (await accountsResponse.json()).accounts || [];
@@ -182,9 +231,10 @@ async function fetchInbox(append = false) {
       inboxState.accountId = accounts[0].id;
       setConnectionStatus(`Connected · ${accounts[0].email_address || accounts[0].provider}`, true);
     }
+    const headers = inboxState.isDemoMode ? {} : { Authorization: `Bearer ${apiConfig.token}` };
     const response = await fetch(
       `${apiConfig.baseUrl}/api/emails/with-classifications?${queryParams()}`,
-      { headers: { Authorization: `Bearer ${apiConfig.token}` } },
+      { headers },
     );
     if (!response.ok) throw new Error(response.status === 401 ? "Authentication failed" : "Could not load messages");
     const payload = await response.json();
@@ -204,8 +254,9 @@ async function fetchInbox(append = false) {
 
 async function openEmail(emailId) {
   try {
+    const headers = inboxState.isDemoMode ? {} : { Authorization: `Bearer ${apiConfig.token}` };
     const response = await fetch(`${apiConfig.baseUrl}/api/emails/${encodeURIComponent(emailId)}`, {
-      headers: { Authorization: `Bearer ${apiConfig.token}` },
+      headers,
     });
     if (!response.ok) throw new Error(response.status === 404 ? "Email not found" : "Could not load email");
     const email = await response.json();
@@ -280,11 +331,18 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") togglePalette(false);
 });
 
-if (apiConfig.baseUrl && apiConfig.token) fetchInbox();
-else {
-  setConnectionStatus("Connect an inbox to begin");
-  setMailListState("Connect your inbox to load real messages.");
-}
+// Initialize: check for demo mode first, then try to load inbox
+(async function init() {
+  const isDemo = await checkDemoMode();
+  if (isDemo) {
+    await fetchInbox();
+  } else if (apiConfig.baseUrl && apiConfig.token) {
+    await fetchInbox();
+  } else {
+    setConnectionStatus("Connect an inbox to begin");
+    setMailListState("Connect your inbox to load real messages.");
+  }
+})();
 
 const onboardingDialog = document.querySelector("#onboardingDialog");
 const onboardingForm = document.querySelector("#onboardingForm");

@@ -29,6 +29,11 @@ to multiple employees until an identity provider, tenant model, role-based
 permissions, PostgreSQL retention deletion, and audited administrator workflow
 are implemented.
 
+Production configuration is fail-closed: `ENVIRONMENT=production` requires
+`STORAGE_BACKEND=supabase`, `TASK_QUEUE_BACKEND=celery`, Supabase credentials,
+Celery broker/result URLs, and dashboard authentication settings. It will not
+silently fall back to SQLite or the local queue.
+
 ### Prerequisites
 
 - Render account

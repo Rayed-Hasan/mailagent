@@ -2,7 +2,7 @@
 Rate limiting for email replies
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from mailagent.core.types import RateLimitInfo
@@ -32,7 +32,7 @@ class RateLimiter:
         history = self.reply_history.get(account_id, [])
 
         # Clean up old entries (older than 1 hour)
-        one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         recent_history = [
             (ts, tid) for ts, tid in history
             if ts > one_hour_ago
@@ -51,7 +51,7 @@ class RateLimiter:
             )
 
         # Check one reply per thread per day
-        one_day_ago = datetime.utcnow() - timedelta(days=1)
+        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
         thread_replies = [
             (ts, tid) for ts, tid in recent_history
             if tid == thread_id and ts > one_day_ago
@@ -78,12 +78,12 @@ class RateLimiter:
         if account_id not in self.reply_history:
             self.reply_history[account_id] = []
 
-        self.reply_history[account_id].append((datetime.utcnow(), thread_id))
+        self.reply_history[account_id].append((datetime.now(timezone.utc), thread_id))
 
     def get_reply_count(self, account_id: str) -> int:
         """Get number of replies sent in the last hour"""
         history = self.reply_history.get(account_id, [])
-        one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         recent_history = [
             ts for ts, _ in history
             if ts > one_hour_ago

@@ -40,6 +40,8 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+node_modules/
+desktop/backend/
 
 # Logs
 *.log

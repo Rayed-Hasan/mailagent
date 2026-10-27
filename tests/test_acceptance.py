@@ -4,7 +4,7 @@ Tests against 100 mixed emails with various categories
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from mailagent.core.types import EmailMessage, EmailCategory, EmailAction
 from mailagent.classifier.email_classifier import EmailClassifier
 from mailagent.policy.worth_sending_policy import WorthSendingPolicy
@@ -21,7 +21,7 @@ TEST_EMAILS = [
         sender_email="john@example.com",
         subject="Re: Project timeline",
         body="Thanks for the update. Tuesday works for me.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # FYI
@@ -32,7 +32,7 @@ TEST_EMAILS = [
         sender_email="hr@company.com",
         subject="Holiday schedule",
         body="Please note the office will be closed next Monday.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # newsletter
@@ -43,7 +43,7 @@ TEST_EMAILS = [
         sender_email="newsletter@techweekly.com",
         subject="This week in tech",
         body="Top stories: AI advances, new gadgets, and more.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={"List-Unsubscribe": "<mailto:unsubscribe@techweekly.com>"}
     ),
     # promo
@@ -54,7 +54,7 @@ TEST_EMAILS = [
         sender_email="deals@store.com",
         subject="50% off everything!",
         body="Don't miss our biggest sale of the year.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # received
@@ -65,7 +65,7 @@ TEST_EMAILS = [
         sender_email="receipt@payment.com",
         subject="Receipt for your purchase",
         body="Thank you for your payment of $99.00.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={"Auto-Submitted": "auto-generated"}
     ),
     # notification
@@ -76,7 +76,7 @@ TEST_EMAILS = [
         sender_email="alert@system.com",
         subject="Your password was changed",
         body="Your password was successfully changed.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # spam
@@ -87,7 +87,7 @@ TEST_EMAILS = [
         sender_email="winner@spam.com",
         subject="You've won $1,000,000!",
         body="Click here to claim your prize now!",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # personal
@@ -98,7 +98,7 @@ TEST_EMAILS = [
         sender_email="mom@family.com",
         subject="Dinner this weekend?",
         body="Hi sweetie, want to come over for dinner on Sunday?",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # urgent
@@ -109,7 +109,7 @@ TEST_EMAILS = [
         sender_email="urgent@client.com",
         subject="URGENT: Server down",
         body="Our server is down and we need help immediately!",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # sensitive - money
@@ -120,7 +120,7 @@ TEST_EMAILS = [
         sender_email="finance@company.com",
         subject="Invoice payment needed",
         body="Please approve the invoice payment of $50,000.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # sensitive - legal
@@ -131,7 +131,7 @@ TEST_EMAILS = [
         sender_email="legal@company.com",
         subject="Contract review",
         body="Please review the attached contract for signature.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # sensitive - medical
@@ -142,7 +142,7 @@ TEST_EMAILS = [
         sender_email="doctor@clinic.com",
         subject="Test results",
         body="Your test results are ready for review.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # sensitive - HR
@@ -153,7 +153,7 @@ TEST_EMAILS = [
         sender_email="hr@company.com",
         subject="Employment offer",
         body="We are pleased to offer you the position of Senior Engineer.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
     # sensitive - emotional
@@ -164,7 +164,7 @@ TEST_EMAILS = [
         sender_email="customer@complaint.com",
         subject="Very disappointed",
         body="I am very upset with the service I received and demand a refund.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     ),
 ]
@@ -222,7 +222,7 @@ def test_worth_sending_policy():
         sender_email="noreply@system.com",
         subject="Notification",
         body="You have a new notification.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     )
 
@@ -237,7 +237,7 @@ def test_worth_sending_policy():
         sender_email="finance@company.com",
         subject="Payment",
         body="Please approve the payment of $10,000.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     )
 
@@ -252,7 +252,7 @@ def test_worth_sending_policy():
         sender_email="newsletter@tech.com",
         subject="Weekly digest",
         body="Top stories this week...",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={"List-Unsubscribe": "<mailto:unsubscribe@tech.com>"}
     )
 
@@ -272,7 +272,7 @@ def test_safety_rules():
         sender_email="legal@company.com",
         subject="Contract",
         body="Please review the contract.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     )
 
@@ -289,7 +289,7 @@ def test_safety_rules():
         sender_email="new@unknown.com",
         subject="Introduction",
         body="Hi, I'd like to connect.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     )
 
@@ -310,7 +310,7 @@ def test_no_reply_to_newsletters():
         sender_email="newsletter@techweekly.com",
         subject="This week in tech",
         body="Top stories...",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={"List-Unsubscribe": "<mailto:unsubscribe@techweekly.com>"}
     )
 
@@ -329,7 +329,7 @@ def test_no_reply_to_no_reply_addresses():
         sender_email="noreply@system.com",
         subject="Notification",
         body="You have a new notification.",
-        received_at=datetime.utcnow(),
+        received_at=datetime.now(timezone.utc),
         raw_headers={}
     )
 

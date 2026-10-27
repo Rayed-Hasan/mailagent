@@ -5,7 +5,7 @@ FastAPI dashboard for monitoring and controls
 from pathlib import Path
 from typing import Dict
 
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,9 +13,13 @@ from typing import List, Optional
 from datetime import datetime
 
 from mailagent.core.database import Database
-from mailagent.core.types import AutonomyMode, DraftStatus
+from mailagent.core.types import AutonomyMode, Draft, DraftStatus
 from mailagent.core.config import settings
 from mailagent.dashboard.auth import require_dashboard_auth
+from mailagent.dashboard.rate_limiter import demo_rate_limiter, get_client_ip
+from mailagent.demo.demo_seeder import DemoSeeder
+from mailagent.demo.demo_data import get_demo_user_id, get_demo_account_id
+from fastapi import Request
 
 
 app = FastAPI(title="MailAgent Dashboard")
@@ -45,8 +49,30 @@ async def frontend_asset(asset: str):
         raise HTTPException(status_code=404, detail="Asset not found")
     return FileResponse(frontend_dir / asset)
 
+
+@app.get("/landing.css")
+async def landing_styles():
+    """Serve the public landing page stylesheet."""
+    return FileResponse(frontend_dir / "landing.css")
+
+
 # Database instance
-db = Database()
+db = Database(force_demo_mode=settings.public_demo_mode)
+
+
+@app.on_event("startup")
+async def initialize_database() -> None:
+    await db.initialize()
+
+    # Seed demo data if in public demo mode
+    if settings.public_demo_mode:
+        seeder = DemoSeeder(db)
+        await seeder.seed_demo_data()
+
+
+@app.on_event("shutdown")
+async def close_database() -> None:
+    await db.close()
 
 
 # Pydantic models
@@ -71,7 +97,26 @@ class ProviderSettingRequest(BaseModel):
     model_drafting: str = ""
 
 
+class DemoDraftRequest(BaseModel):
+    email_id: str
+
+
+class DemoSendRequest(BaseModel):
+    draft_id: str
+
+
 async def require_account_owner(account_id: str, user_id: str) -> Dict:
+    # In demo mode, bypass account owner check for demo account
+    if settings.public_demo_mode and account_id == get_demo_account_id() and user_id == get_demo_user_id():
+        # Return a minimal demo account object
+        return {
+            "id": get_demo_account_id(),
+            "user_id": get_demo_user_id(),
+            "provider": "demo",
+            "email_address": "judge@example.com",
+            "is_active": True
+        }
+
     account = await db.get_account(account_id)
     if not account or account.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -86,12 +131,53 @@ def public_account(account: Dict) -> Dict:
 # Dashboard endpoints
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {
-        "service": "MailAgent Dashboard",
-        "version": "0.1.0",
-        "status": "running"
-    }
+    """Serve the public product landing page."""
+    return FileResponse(frontend_dir / "landing.html")
+
+
+@app.get("/health")
+async def health():
+    """Unauthenticated process health check for the hosting platform."""
+    return {"status": "ok", "demo_mode": settings.public_demo_mode}
+
+
+# Demo mode dependency override for public access
+async def demo_mode_auth_dependency(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> str:
+    """
+    In demo mode, return demo user ID without auth (with rate limiting).
+    In normal mode, require dashboard auth.
+    """
+    if settings.public_demo_mode:
+        # Apply rate limiting in demo mode
+        client_ip = await get_client_ip(request)
+        allowed, error = await demo_rate_limiter.check_rate_limit(client_ip)
+        if not allowed:
+            raise HTTPException(status_code=429, detail=error)
+
+        return get_demo_user_id()
+
+    # Normal mode: require dashboard auth
+    expected_token = settings.dashboard_api_token
+    expected_user_id = settings.dashboard_user_id
+
+    if not expected_token or not expected_user_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Dashboard authentication is not configured",
+        )
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if (
+        scheme.lower() != "bearer"
+        or not token
+        or token != expected_token
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    return expected_user_id
 
 
 @app.get("/api/status", dependencies=[Depends(require_dashboard_auth)])
@@ -162,10 +248,33 @@ async def toggle_kill_switch(
 
 
 @app.get("/api/accounts")
-async def get_accounts(user_id: str = Depends(require_dashboard_auth)):
+async def get_accounts(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
     """Get all email accounts for a user"""
-    accounts = await db.get_accounts_by_user(user_id)
-    return {"accounts": [public_account(account) for account in accounts]}
+    client_ip = await get_client_ip(request) if settings.public_demo_mode else None
+
+    try:
+        # In demo mode, return demo account
+        if settings.public_demo_mode:
+            return {
+                "accounts": [
+                    {
+                        "id": get_demo_account_id(),
+                        "user_id": get_demo_user_id(),
+                        "provider": "demo",
+                        "email_address": "judge@example.com",
+                        "is_active": True
+                    }
+                ]
+            }
+
+        accounts = await db.get_accounts_by_user(user_id)
+        return {"accounts": [public_account(account) for account in accounts]}
+    finally:
+        if client_ip:
+            await demo_rate_limiter.release_request(client_ip)
 
 
 @app.get("/api/emails")
@@ -192,49 +301,71 @@ async def get_emails_with_classifications(
     label: Optional[str] = None,
     needs_reply: Optional[bool] = None,
     sort_by: str = Query(default="priority", pattern="^(priority|received_at)$"),
-    user_id: str = Depends(require_dashboard_auth),
+    user_id: str = Depends(demo_mode_auth_dependency),
+    request: Request = None,
 ):
     """Get priority inbox data with server-side filtering and pagination."""
-    await require_account_owner(account_id, user_id)
-    if (
-        min_priority is not None
-        and max_priority is not None
-        and min_priority > max_priority
-    ):
-        raise HTTPException(status_code=422, detail="min_priority cannot exceed max_priority")
+    client_ip = await get_client_ip(request) if settings.public_demo_mode else None
 
-    result = await db.get_emails_with_classifications(
-        account_id=account_id,
-        limit=limit,
-        offset=offset,
-        category=category,
-        min_priority=min_priority,
-        max_priority=max_priority,
-        label=label,
-        needs_reply=needs_reply,
-        sort_by=sort_by,
-    )
-    return {**result, "limit": limit, "offset": offset, "sort_by": sort_by}
+    try:
+        await require_account_owner(account_id, user_id)
+        if (
+            min_priority is not None
+            and max_priority is not None
+            and min_priority > max_priority
+        ):
+            raise HTTPException(status_code=422, detail="min_priority cannot exceed max_priority")
+
+        result = await db.get_emails_with_classifications(
+            account_id=account_id,
+            limit=limit,
+            offset=offset,
+            category=category,
+            min_priority=min_priority,
+            max_priority=max_priority,
+            label=label,
+            needs_reply=needs_reply,
+            sort_by=sort_by,
+        )
+        return {**result, "limit": limit, "offset": offset, "sort_by": sort_by}
+    finally:
+        if client_ip:
+            await demo_rate_limiter.release_request(client_ip)
 
 
 @app.get("/api/emails/{email_id}")
-async def get_email(email_id: str, user_id: str = Depends(require_dashboard_auth)):
+async def get_email(
+    request: Request,
+    email_id: str,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
     """Get a specific email with classification and labels"""
-    email = await db.get_email(email_id)
-    account = await db.get_account_for_email(email_id)
-    if not email or not account or account.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="Resource not found")
+    client_ip = await get_client_ip(request) if settings.public_demo_mode else None
 
-    # Add classification
-    classification = await db.get_classification(email_id)
-    if classification:
-        email["classification"] = classification
+    try:
+        email = await db.get_email(email_id)
+        account = await db.get_account_for_email(email_id)
 
-    # Add labels
-    labels = await db.get_email_labels(email_id)
-    email["labels"] = [label["name"] for label in labels]
+        # In demo mode, skip account ownership check
+        if not settings.public_demo_mode:
+            if not email or not account or account.get("user_id") != user_id:
+                raise HTTPException(status_code=404, detail="Resource not found")
+        elif not email:
+            raise HTTPException(status_code=404, detail="Resource not found")
 
-    return email
+        # Add classification
+        classification = await db.get_classification(email_id)
+        if classification:
+            email["classification"] = classification
+
+        # Add labels
+        labels = await db.get_email_labels(email_id)
+        email["labels"] = [label["name"] for label in labels]
+
+        return email
+    finally:
+        if client_ip:
+            await demo_rate_limiter.release_request(client_ip)
 
 
 @app.get("/api/classifications")
@@ -250,40 +381,157 @@ async def get_classifications(
 
 @app.get("/api/drafts")
 async def get_drafts(
+    request: Request,
     account_id: str,
     status: Optional[str] = None,
-    user_id: str = Depends(require_dashboard_auth),
+    user_id: str = Depends(demo_mode_auth_dependency),
 ):
     """Get drafts for an account"""
-    await require_account_owner(account_id, user_id)
-    drafts = await db.get_pending_drafts(account_id)
-    if status:
-        drafts = [d for d in drafts if d["status"] == status]
-    return {"drafts": drafts}
+    client_ip = await get_client_ip(request) if settings.public_demo_mode else None
+
+    try:
+        await require_account_owner(account_id, user_id)
+        drafts = await db.get_pending_drafts(account_id)
+        if status:
+            drafts = [d for d in drafts if d["status"] == status]
+        return {"drafts": drafts}
+    finally:
+        if client_ip:
+            await demo_rate_limiter.release_request(client_ip)
 
 
 @app.post("/api/drafts/approve")
 async def approve_draft(
-    request: DraftApprovalRequest,
-    user_id: str = Depends(require_dashboard_auth),
+    http_request: Request,
+    approval_request: DraftApprovalRequest,
+    user_id: str = Depends(demo_mode_auth_dependency),
 ):
     """Approve or reject a draft"""
-    draft = await db.get_draft(request.draft_id)
-    account = (
-        await db.get_account_for_email(draft["email_id"])
-        if draft
-        else None
-    )
-    if not draft or not account or account.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="Resource not found")
+    client_ip = await get_client_ip(http_request) if settings.public_demo_mode else None
 
-    new_status = DraftStatus.APPROVED if request.approve else DraftStatus.REJECTED
-    success = await db.update_draft_status(request.draft_id, new_status)
+    try:
+        draft = await db.get_draft(approval_request.draft_id)
+        account = (
+            await db.get_account_for_email(draft["email_id"])
+            if draft
+            else None
+        )
 
-    if not success:
-        raise HTTPException(status_code=404, detail="Resource not found")
+        # In demo mode, skip account ownership check
+        if not settings.public_demo_mode:
+            if not draft or not account or account.get("user_id") != user_id:
+                raise HTTPException(status_code=404, detail="Resource not found")
+        elif not draft:
+            raise HTTPException(status_code=404, detail="Resource not found")
 
-    return {"draft_id": request.draft_id, "status": new_status.value}
+        new_status = DraftStatus.APPROVED if approval_request.approve else DraftStatus.REJECTED
+        success = await db.update_draft_status(approval_request.draft_id, new_status)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        # In demo mode, add a note that this is simulated
+        response = {"draft_id": approval_request.draft_id, "status": new_status.value}
+        if settings.public_demo_mode:
+            response["demo_note"] = "This is a simulated action - no email was actually sent"
+
+        return response
+    finally:
+        if client_ip:
+            await demo_rate_limiter.release_request(client_ip)
+
+
+@app.post("/api/demo/drafts/generate")
+async def generate_demo_draft(
+    http_request: Request,
+    draft_request: DemoDraftRequest,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Generate a draft for synthetic mail using optional OpenRouter inference."""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    client_ip = await get_client_ip(http_request)
+    try:
+        email = await db.get_email(draft_request.email_id)
+        if not email:
+            raise HTTPException(status_code=404, detail="Demo email not found")
+        account = await db.get_account_for_email(draft_request.email_id)
+        if not account or account.get("id") != get_demo_account_id():
+            raise HTTPException(status_code=404, detail="Demo email not found")
+
+        classification = await db.get_classification(draft_request.email_id)
+        if not classification:
+            raise HTTPException(status_code=409, detail="Email is not classified")
+
+        from mailagent.demo.demo_provider import complete_demo
+        from mailagent.llm.base import LLMMessage
+
+        response, used_fallback = await complete_demo(
+            [
+                LLMMessage(
+                    role="user",
+                    content=(
+                        "Draft a concise professional reply to this synthetic email. "
+                        "Mention that this is a demo only if needed.\n\n"
+                        f"Subject: {email['subject']}\n\n{email['body']}"
+                    ),
+                )
+            ],
+            role="drafting",
+            max_tokens=300,
+        )
+        draft = Draft(
+            email_id=draft_request.email_id,
+            classification_id=classification["id"],
+            content=response.text,
+        )
+        draft_id = await db.save_draft(draft)
+        return {
+            "draft_id": draft_id,
+            "content": response.text,
+            "provider": response.provider,
+            "model": response.model,
+            "fallback": used_fallback,
+            "demo_note": "Synthetic draft only; no external email is sent.",
+        }
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
+
+
+@app.post("/api/demo/send")
+async def simulate_demo_send(
+    http_request: Request,
+    send_request: DemoSendRequest,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Mark a demo draft as sent without contacting SMTP or a mailbox."""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    client_ip = await get_client_ip(http_request)
+    try:
+        draft = await db.get_draft(send_request.draft_id)
+        if not draft:
+            raise HTTPException(status_code=404, detail="Demo draft not found")
+        account = await db.get_account_for_email(draft["email_id"])
+        if not account or account.get("id") != get_demo_account_id():
+            raise HTTPException(status_code=404, detail="Demo draft not found")
+        if draft["status"] != DraftStatus.APPROVED.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Approve the demo draft before simulating a send",
+            )
+        if not await db.update_draft_status(send_request.draft_id, DraftStatus.SENT):
+            raise HTTPException(status_code=404, detail="Demo draft not found")
+        return {
+            "draft_id": send_request.draft_id,
+            "status": DraftStatus.SENT.value,
+            "simulated": True,
+            "demo_note": "Simulated send only; no email was sent.",
+        }
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
 
 
 @app.get("/api/audit-log")
@@ -430,6 +678,56 @@ async def get_stats(
         "pending_drafts": len(drafts),
         "account_id": account_id
     }
+
+
+# Public Demo Endpoints
+@app.get("/api/demo/status")
+async def get_demo_status(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Get public demo status and configuration"""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    try:
+        from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email
+
+        return {
+            "demo_mode": True,
+            "demo_account_id": get_demo_account_id(),
+            "demo_account_email": get_demo_account_email(),
+            "ai_provider": "openrouter" if settings.openrouter_api_key else "fallback",
+            "ai_model": settings.openrouter_model,
+            "note": "This is a public demo with synthetic data. No real emails are sent."
+        }
+    finally:
+        pass  # Rate limiting is handled by demo_mode_auth_dependency
+
+
+@app.post("/api/demo/reset")
+async def reset_demo_data(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Reset demo data to initial state"""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    if not settings.demo_reset_endpoint_enabled:
+        raise HTTPException(status_code=403, detail="Demo reset is disabled")
+
+    try:
+        seeder = DemoSeeder(db)
+        counts = await seeder.reset_demo_data()
+
+        return {
+            "reset": True,
+            "counts": counts,
+            "message": "Demo data has been reset to initial state"
+        }
+    finally:
+        pass  # Rate limiting is handled by demo_mode_auth_dependency
 
 
 if __name__ == "__main__":

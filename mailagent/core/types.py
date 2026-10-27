@@ -4,7 +4,7 @@ Core type definitions for MailAgent
 
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 
@@ -104,7 +104,7 @@ class AuditLogEntry(BaseModel):
     reason: str
     confidence: Optional[float] = None
     context: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RateLimitInfo(BaseModel):
@@ -119,7 +119,7 @@ class EmailLabel(BaseModel):
     """Email label for categorization"""
     name: str
     source: str = "system"  # "system" or "user"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EmailLabels(BaseModel):

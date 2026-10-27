@@ -1,0 +1,35 @@
+# Docker Compose configuration for public demo mode
+# Run with: docker-compose -f docker-compose.demo.yml up
+
+version: '3.8'
+
+services:
+  mailagent-demo:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PUBLIC_DEMO_MODE=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=google/gemma-2-9b-it:free
+      - DEMO_RATE_LIMIT_PER_MINUTE=30
+      - DEMO_MAX_CONCURRENT_REQUESTS=5
+      - DEMO_RESET_ENDPOINT_ENABLED=true
+      - DEMO_SQLITE_DB_PATH=/app/mailagent-demo.db
+      - STORAGE_BACKEND=sqlite
+      - SQLITE_DB_PATH=/app/mailagent.db
+      - TASK_QUEUE_BACKEND=local
+      - LOCAL_QUEUE_DB_PATH=/app/mailagent-queue.db
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - DASHBOARD_HOST=0.0.0.0
+      - DASHBOARD_PORT=8000
+      - DASHBOARD_ALLOWED_ORIGINS=*
+      - MAILAGENT_ENCRYPTION_KEY=
+    volumes:
+      # Persist demo database
+      - demo-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  demo-data:

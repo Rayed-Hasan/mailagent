@@ -20,10 +20,10 @@ from mailagent.core.secret_store import SecretStore
 class SQLiteStorage(StorageInterface):
     """SQLite storage backend for local deployments"""
 
-    def __init__(self, db_path: str = "mailagent.db"):
+    def __init__(self, db_path: str = "mailagent.db", secret_store: Optional[SecretStore] = None):
         self.db_path = db_path
         self.connection = None
-        self.secret_store = SecretStore()
+        self.secret_store = secret_store or SecretStore()
 
     async def initialize(self) -> None:
         """Initialize SQLite database and create tables"""
@@ -325,7 +325,9 @@ class SQLiteStorage(StorageInterface):
                 query += " AND (c.action NOT IN ('reply', 'draft_only') OR c.action IS NULL)"
 
             # Count total
-            count_query = query.replace("SELECT e.*,", "SELECT COUNT(*) as count")
+            count_query = "SELECT COUNT(*) as count FROM emails" + query.split(
+                "FROM emails", 1
+            )[1]
             cursor = await db.execute(count_query, params)
             total_row = await cursor.fetchone()
             total = total_row['count'] if total_row else 0
@@ -871,8 +873,9 @@ class SQLiteStorage(StorageInterface):
     async def delete_email_label(self, email_id: str, label_name: str) -> bool:
         """Delete a specific label from an email"""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
-                DELETE FROM email_labels WHERE email_id = ? AND name = ?
-            """, (email_id, label_name))
+            cursor = await db.execute(
+                "DELETE FROM email_labels WHERE email_id = ? AND name = ?",
+                (email_id, label_name),
+            )
             await db.commit()
-            return True
+            return cursor.rowcount > 0

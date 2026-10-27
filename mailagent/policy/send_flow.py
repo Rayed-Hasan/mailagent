@@ -3,11 +3,14 @@ Send flow with autonomy modes and delayed send
 """
 
 import asyncio
+import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from mailagent.core.types import EmailAction, AutonomyMode, DraftStatus, Draft
 from mailagent.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SendFlow:
@@ -118,9 +121,9 @@ class SendFlow:
         # If database is available, save the draft with scheduled time
         if self.db:
             draft_id = await self.db.save_draft(draft)
-            print(f"Scheduling send for {draft.email_id} at {send_time}, draft_id={draft_id}")
+            logger.info("Scheduling send for email %s at %s (draft=%s)", draft.email_id, send_time, draft_id)
         else:
-            print(f"Scheduling send for {draft.email_id} at {send_time}")
+            logger.info("Scheduling send for email %s at %s (no db)", draft.email_id, send_time)
 
         # Check if cancelled during delay window (in-memory check)
         if draft.email_id in self.cancelled_drafts:
@@ -132,8 +135,8 @@ class SendFlow:
                 draft_data = await self.db.get_draft(draft.id)
                 if draft_data and draft_data.get('status') == DraftStatus.CANCELLED.value:
                     return DraftStatus.CANCELLED, "Send cancelled by user"
-            except Exception as e:
-                print(f"Error checking draft status: {e}")
+            except Exception:
+                logger.exception("Error checking draft status for email %s", draft.email_id)
 
         # Simulate delay (in production, this would be a background task)
         await asyncio.sleep(min(self.delay_seconds, 1))  # Cap at 1 second for testing
@@ -168,8 +171,8 @@ class SendFlow:
             try:
                 await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
                 return True
-            except Exception as e:
-                print(f"Error cancelling draft in database: {e}")
+            except Exception:
+                logger.exception("Error cancelling draft %s in database", draft_id)
                 return False
 
         return True

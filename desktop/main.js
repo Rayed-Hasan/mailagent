@@ -32,11 +32,14 @@ async function waitForBackend() {
 
 function startBackend() {
   const python = process.env.MAILAGENT_PYTHON || "python";
+  const backendRoot = app.isPackaged
+    ? path.join(process.resourcesPath, "backend")
+    : path.resolve(__dirname, "..");
   backend = spawn(
     python,
     ["-m", "uvicorn", "mailagent.dashboard.app:app", "--host", "127.0.0.1", "--port", String(port)],
     {
-      cwd: path.resolve(__dirname, ".."),
+      cwd: backendRoot,
       env: {
         ...process.env,
         DASHBOARD_HOST: "127.0.0.1",

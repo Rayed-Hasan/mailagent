@@ -1,113 +1,29 @@
 services:
-  - type: worker
-    name: mailagent-worker
-    env: python
-    buildCommand: pip install -r requirements-enterprise.txt
-    startCommand: celery -A mailagent.worker worker --loglevel=info --concurrency=2
-    envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_BROKER_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_RESULT_BACKEND
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: ENVIRONMENT
-        value: production
-      - key: LOG_LEVEL
-        value: INFO
-      - key: MAX_AUTO_REPLIES_PER_HOUR
-        value: 10
-      - key: CONFIDENCE_THRESHOLD
-        value: 0.85
-      - key: DEFAULT_AUTONOMY_MODE
-        value: approve
-      - key: DELAY_SEND_SECONDS
-        value: 60
-
   - type: web
-    name: mailagent-dashboard
+    name: mailagent-public-demo
     env: python
-    buildCommand: pip install -r requirements-enterprise.txt
+    plan: free
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_BROKER_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_RESULT_BACKEND
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
       - key: ENVIRONMENT
         value: production
-      - key: DASHBOARD_PORT
-        value: 10000
-      - key: DASHBOARD_API_TOKEN
-        sync: false
-      - key: DASHBOARD_USER_ID
-        sync: false
+      - key: PUBLIC_DEMO_MODE
+        value: "true"
+      - key: STORAGE_BACKEND
+        value: sqlite
+      - key: TASK_QUEUE_BACKEND
+        value: local
+      - key: DEMO_SQLITE_DB_PATH
+        value: /tmp/mailagent-public-demo.db
       - key: DASHBOARD_ALLOWED_ORIGINS
-        sync: false
-
-  - type: pserv
-    name: mailagent-beat
-    env: python
-    buildCommand: pip install -r requirements-enterprise.txt
-    startCommand: celery -A mailagent.worker beat --loglevel=info
-    envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_BROKER_URL
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: CELERY_RESULT_BACKEND
-        fromService:
-          type: redis
-          name: mailagent-redis
-          property: connectionString
-      - key: ENVIRONMENT
-        value: production
-
-databases:
-  - name: mailagent-redis
-    databaseName: mailagent
-    user: mailagent
+        value: "*"
+      - key: OPENROUTER_MODEL
+        value: google/gemma-2-9b-it:free
+      - key: DEMO_RATE_LIMIT_PER_MINUTE
+        value: "30"
+      - key: DEMO_MAX_CONCURRENT_REQUESTS
+        value: "5"
+      - key: DEMO_RESET_ENDPOINT_ENABLED
+        value: "true"

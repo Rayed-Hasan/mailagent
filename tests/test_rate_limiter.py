@@ -3,7 +3,7 @@ Unit tests for rate limiter
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from mailagent.policy.rate_limiter import RateLimiter
 from mailagent.core.types import RateLimitInfo
 
@@ -66,7 +66,7 @@ def test_different_accounts_separate_limits(rate_limiter):
 def test_old_entries_cleaned_up(rate_limiter):
     """Test that old entries are cleaned up"""
     # Record a reply 2 hours ago
-    old_time = datetime.utcnow() - timedelta(hours=2)
+    old_time = datetime.now(timezone.utc) - timedelta(hours=2)
     rate_limiter.reply_history["account_123"] = [(old_time, "thread_123")]
 
     # Check rate limit should clean up old entries

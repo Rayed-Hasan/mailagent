@@ -201,22 +201,15 @@ class IMAPProvider(EmailProviderInterface):
         thread_id: Optional[str] = None
     ) -> str:
         """Create a draft email"""
-        # This would require SMTP integration
-        # For now, return a placeholder ID
-        draft_id = f"draft_{datetime.utcnow().timestamp()}"
-        print(f"Draft created: {draft_id}")
-        return draft_id
+        raise NotImplementedError("SMTP integration is not implemented for IMAP accounts")
 
     async def send_reply(self, draft_id: str) -> bool:
         """Send a draft reply"""
-        # This would require SMTP integration
-        print(f"Sending draft: {draft_id}")
-        return True
+        raise NotImplementedError("SMTP integration is not implemented for IMAP accounts")
 
     async def delete_draft(self, draft_id: str) -> bool:
         """Delete a draft"""
-        print(f"Deleting draft: {draft_id}")
-        return True
+        raise NotImplementedError("SMTP integration is not implemented for IMAP accounts")
 
     def is_no_reply_address(self, email: str) -> bool:
         """Check if email is a no-reply address"""

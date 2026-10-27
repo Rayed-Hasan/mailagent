@@ -17,9 +17,14 @@ npm start
 ```
 
 Use `MAILAGENT_PYTHON` when Python is not on PATH. `npm run build` creates a
-portable Windows executable through electron-builder. macOS/Linux packaging is
-not claimed yet; the frontend and API remain usable with the documented Python
-launch commands.
+portable Windows executable through electron-builder when the Windows account
+has the approved symlink capability required by its `winCodeSign` helper.
+If that capability is unavailable, `npm run build:portable` creates a
+no-symlink portable archive and stages the backend package and frontend assets
+inside the application resources. The packaged app still requires Python and
+the installed `requirements.txt` dependencies on the target machine.
+macOS/Linux packaging is not claimed yet; the frontend and API remain usable
+with the documented Python launch commands.
 
 The desktop process forces `127.0.0.1`, SQLite, and the local queue. Email
 synchronization and any configured cloud AI provider still use their external

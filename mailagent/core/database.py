@@ -3,6 +3,7 @@ Database layer with storage abstraction
 """
 
 import json
+import hashlib
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -17,21 +18,37 @@ from mailagent.core.types import (
 class Database:
     """Database operations with pluggable storage backend"""
 
-    def __init__(self, storage_backend: str = None):
+    def __init__(self, storage_backend: str = None, force_demo_mode: bool = False):
         """
         Initialize database with specified storage backend.
 
         Args:
             storage_backend: 'supabase' (default) or 'sqlite'
+            force_demo_mode: If True, use demo-specific database path
         """
         self.storage_backend = storage_backend or settings.storage_backend
         self.storage = None
         self.client = None
+        self.force_demo_mode = force_demo_mode
+
+        if force_demo_mode or settings.public_demo_mode:
+            self.storage_backend = "sqlite"
 
         if self.storage_backend == 'sqlite':
             from mailagent.core.sqlite_storage import SQLiteStorage
-            db_path = getattr(settings, 'sqlite_db_path', 'mailagent.db')
-            self.storage = SQLiteStorage(db_path)
+            # Use demo database if in demo mode or forced
+            if force_demo_mode or settings.public_demo_mode:
+                db_path = getattr(settings, 'demo_sqlite_db_path', 'mailagent-demo.db')
+                demo_key = hashlib.sha256(
+                    b"mailagent-public-demo-only"
+                ).digest()
+                self.storage = SQLiteStorage(
+                    db_path,
+                    secret_store=SecretStore(key=demo_key),
+                )
+            else:
+                db_path = getattr(settings, 'sqlite_db_path', 'mailagent.db')
+                self.storage = SQLiteStorage(db_path)
         elif self.storage_backend == "supabase":
             from supabase import create_client, Client
             self.client: Client = create_client(

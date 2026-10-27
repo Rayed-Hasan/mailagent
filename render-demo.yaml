@@ -1,0 +1,65 @@
+# Render deployment configuration for public demo mode
+# This is a simplified deployment for hackathon demo with SQLite and no external services
+
+services:
+  - type: web
+    name: mailagent-demo
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Demo Mode Configuration
+      - key: PUBLIC_DEMO_MODE
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: google/gemma-2-9b-it:free
+      - key: DEMO_RATE_LIMIT_PER_MINUTE
+        value: 30
+      - key: DEMO_MAX_CONCURRENT_REQUESTS
+        value: 5
+      - key: DEMO_RESET_ENDPOINT_ENABLED
+        value: "true"
+      - key: DEMO_SQLITE_DB_PATH
+        value: /tmp/mailagent-demo.db
+
+      # Storage Backend - SQLite for demo
+      - key: STORAGE_BACKEND
+        value: sqlite
+      - key: SQLITE_DB_PATH
+        value: /tmp/mailagent.db
+
+      # Task Queue - Local for demo
+      - key: TASK_QUEUE_BACKEND
+        value: local
+      - key: LOCAL_QUEUE_DB_PATH
+        value: /tmp/mailagent-queue.db
+
+      # Application Settings
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MAX_AUTO_REPLIES_PER_HOUR
+        value: 10
+      - key: CONFIDENCE_THRESHOLD
+        value: 0.85
+      - key: DEFAULT_AUTONOMY_MODE
+        value: approve
+      - key: DELAY_SEND_SECONDS
+        value: 60
+
+      # Dashboard Settings - Public access
+      - key: DASHBOARD_HOST
+        value: 0.0.0.0
+      - key: DASHBOARD_PORT
+        value: 10000
+      - key: DASHBOARD_ALLOWED_ORIGINS
+        value: "*"
+
+      # No encryption key needed for demo (no real credentials)
+      - key: MAILAGENT_ENCRYPTION_KEY
+        value: ""
+
+      # No Supabase, Redis, or other external services needed for demo

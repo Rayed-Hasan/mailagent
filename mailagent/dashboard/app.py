@@ -3,14 +3,16 @@ FastAPI dashboard for monitoring and controls
 """
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Any
+import logging
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
 from datetime import datetime
+
+logger = logging.getLogger("mailagent.dashboard")
 
 from mailagent.core.database import Database
 from mailagent.core.types import AutonomyMode, Draft, DraftStatus
@@ -60,14 +62,86 @@ async def landing_styles():
 db = Database(force_demo_mode=settings.public_demo_mode)
 
 
+# Real Gmail Provider instance for demo if connected
+demo_gmail_provider: Optional[Any] = None
+demo_sync_service: Optional[Any] = None
+demo_mailbox_status: Dict[str, Any] = {
+    "connected": False,
+    "email_address": None,
+    "last_sync": None,
+    "last_error": None,
+    "message_count": 0,
+}
+
+
 @app.on_event("startup")
 async def initialize_database() -> None:
+    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
     await db.initialize()
 
-    # Seed demo data if in public demo mode
+    # In public demo mode, check for owner-configured real Gmail mailbox
     if settings.public_demo_mode:
-        seeder = DemoSeeder(db)
-        await seeder.seed_demo_data()
+        from mailagent.mail.sync_service import GmailSyncService
+        from mailagent.providers.gmail_provider import GmailProvider
+        from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email, get_demo_user_id
+
+        demo_sync_service = GmailSyncService(db)
+
+        # 1. Check if owner provided persistent Gmail refresh token via environment
+        if settings.demo_gmail_refresh_token:
+            client_id = settings.demo_gmail_client_id or settings.google_client_id
+            client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
+            token_dict = {
+                "refresh_token": settings.demo_gmail_refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            demo_gmail_provider = GmailProvider(token_dict)
+            connected = await demo_gmail_provider.connect()
+            if connected:
+                profile = await demo_gmail_provider.get_user_profile()
+                email_addr = (profile.get("emailAddress") if profile else None) or settings.demo_gmail_email or get_demo_account_email()
+                demo_mailbox_status["connected"] = True
+                demo_mailbox_status["email_address"] = email_addr
+                account_id = get_demo_account_id()
+
+                # Ensure account exists in storage
+                existing_acc = await db.get_account(account_id)
+                if not existing_acc:
+                    await db.save_account(
+                        user_id=get_demo_user_id(),
+                        provider="gmail",
+                        email_address=email_addr,
+                        credentials=token_dict,
+                    )
+
+                # Sync real messages
+                sync_stats = await demo_sync_service.sync_mailbox(
+                    account_id=account_id,
+                    provider=demo_gmail_provider,
+                    limit=50,
+                )
+                demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
+            else:
+                demo_mailbox_status["connected"] = False
+                demo_mailbox_status["last_error"] = "Failed to connect to Gmail with provided credentials"
+        else:
+            # Check if account was previously saved in SQLite
+            account_id = get_demo_account_id()
+            acc = await db.get_account(account_id)
+            if acc and acc.get("credentials") and acc.get("provider") == "gmail":
+                demo_gmail_provider = GmailProvider(acc["credentials"])
+                if await demo_gmail_provider.connect():
+                    demo_mailbox_status["connected"] = True
+                    demo_mailbox_status["email_address"] = acc.get("email_address")
+                    # Sync
+                    sync_stats = await demo_sync_service.sync_mailbox(
+                        account_id=account_id,
+                        provider=demo_gmail_provider,
+                        limit=50,
+                    )
+                    demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
 
 
 @app.on_event("shutdown")
@@ -106,14 +180,16 @@ class DemoSendRequest(BaseModel):
 
 
 async def require_account_owner(account_id: str, user_id: str) -> Dict:
-    # In demo mode, bypass account owner check for demo account
+    # In demo mode, bypass account owner check for configured demo account
     if settings.public_demo_mode and account_id == get_demo_account_id() and user_id == get_demo_user_id():
-        # Return a minimal demo account object
+        # Return the demo account representation
+        email_addr = demo_mailbox_status.get("email_address") or get_demo_account_email()
+        provider_name = "gmail" if demo_mailbox_status.get("connected") else "demo"
         return {
             "id": get_demo_account_id(),
             "user_id": get_demo_user_id(),
-            "provider": "demo",
-            "email_address": "judge@example.com",
+            "provider": provider_name,
+            "email_address": email_addr,
             "is_active": True
         }
 
@@ -256,15 +332,17 @@ async def get_accounts(
     client_ip = await get_client_ip(request) if settings.public_demo_mode else None
 
     try:
-        # In demo mode, return demo account
+        # In demo mode, return the single configured demo mailbox
         if settings.public_demo_mode:
+            email_addr = demo_mailbox_status.get("email_address") or get_demo_account_email()
+            provider_name = "gmail" if demo_mailbox_status.get("connected") else "demo"
             return {
                 "accounts": [
                     {
                         "id": get_demo_account_id(),
                         "user_id": get_demo_user_id(),
-                        "provider": "demo",
-                        "email_address": "judge@example.com",
+                        "provider": provider_name,
+                        "email_address": email_addr,
                         "is_active": True
                     }
                 ]
@@ -467,15 +545,19 @@ async def generate_demo_draft(
         from mailagent.demo.demo_provider import complete_demo
         from mailagent.llm.base import LLMMessage
 
+        # Send only the minimum email content necessary for inference
+        prompt_content = (
+            "You are a professional email assistant. Draft a concise, helpful, and professional reply "
+            "to the following message. Be polite and address any direct questions.\n\n"
+            f"Subject: {email.get('subject', '')}\n\n"
+            f"{email.get('body', '')[:1500]}"
+        )
+
         response, used_fallback = await complete_demo(
             [
                 LLMMessage(
                     role="user",
-                    content=(
-                        "Draft a concise professional reply to this synthetic email. "
-                        "Mention that this is a demo only if needed.\n\n"
-                        f"Subject: {email['subject']}\n\n{email['body']}"
-                    ),
+                    content=prompt_content,
                 )
             ],
             role="drafting",
@@ -493,7 +575,7 @@ async def generate_demo_draft(
             "provider": response.provider,
             "model": response.model,
             "fallback": used_fallback,
-            "demo_note": "Synthetic draft only; no external email is sent.",
+            "note": "Draft generated. Sending requires owner approval.",
         }
     finally:
         await demo_rate_limiter.release_request(client_ip)
@@ -505,9 +587,19 @@ async def simulate_demo_send(
     send_request: DemoSendRequest,
     user_id: str = Depends(demo_mode_auth_dependency),
 ):
-    """Mark a demo draft as sent without contacting SMTP or a mailbox."""
+    """
+    Handle send requests in public demo mode.
+    Anonymous sending through owner's real Gmail is disabled by default to protect the account.
+    """
     if not settings.public_demo_mode:
         raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    # In public demo mode with real Gmail, prevent anonymous users from sending arbitrary emails
+    if not settings.demo_allow_public_send:
+        raise HTTPException(
+            status_code=403,
+            detail="Public email sending is disabled to protect the demo mailbox. Judges can review and generate drafts.",
+        )
 
     client_ip = await get_client_ip(http_request)
     try:
@@ -520,7 +612,7 @@ async def simulate_demo_send(
         if draft["status"] != DraftStatus.APPROVED.value:
             raise HTTPException(
                 status_code=409,
-                detail="Approve the demo draft before simulating a send",
+                detail="Approve the demo draft before sending",
             )
         if not await db.update_draft_status(send_request.draft_id, DraftStatus.SENT):
             raise HTTPException(status_code=404, detail="Demo draft not found")
@@ -528,7 +620,7 @@ async def simulate_demo_send(
             "draft_id": send_request.draft_id,
             "status": DraftStatus.SENT.value,
             "simulated": True,
-            "demo_note": "Simulated send only; no email was sent.",
+            "note": "Draft status updated to sent.",
         }
     finally:
         await demo_rate_limiter.release_request(client_ip)
@@ -686,23 +778,80 @@ async def get_demo_status(
     request: Request,
     user_id: str = Depends(demo_mode_auth_dependency),
 ):
-    """Get public demo status and configuration"""
+    """Get public demo status and configuration with real mailbox status"""
     if not settings.public_demo_mode:
         raise HTTPException(status_code=403, detail="Demo mode is not enabled")
 
     try:
         from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email
 
+        account_id = get_demo_account_id()
+        is_connected = demo_mailbox_status.get("connected", False)
+        email_addr = demo_mailbox_status.get("email_address") or get_demo_account_email()
+
+        # Count emails in demo mailbox
+        emails = await db.get_emails_by_account(account_id, limit=1000)
+        email_count = len(emails)
+
         return {
             "demo_mode": True,
-            "demo_account_id": get_demo_account_id(),
-            "demo_account_email": get_demo_account_email(),
+            "demo_account_id": account_id,
+            "demo_account_email": email_addr,
+            "gmail_connected": is_connected,
+            "connection_status": "connected" if is_connected else "disconnected",
+            "message_count": email_count,
+            "last_sync": demo_mailbox_status.get("last_sync"),
+            "last_error": demo_mailbox_status.get("last_error"),
             "ai_provider": "openrouter" if settings.openrouter_api_key else "fallback",
             "ai_model": settings.openrouter_model,
-            "note": "This is a public demo with synthetic data. No real emails are sent."
+            "can_public_send": settings.demo_allow_public_send,
+            "note": "Messages in the public demo are retrieved from the dedicated demo mailbox."
         }
     finally:
         pass  # Rate limiting is handled by demo_mode_auth_dependency
+
+
+@app.post("/api/demo/sync")
+async def trigger_demo_sync(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Trigger a synchronization of the dedicated Gmail account (safe for judges to refresh)"""
+    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    client_ip = await get_client_ip(request)
+    try:
+        from mailagent.demo.demo_data import get_demo_account_id
+        account_id = get_demo_account_id()
+
+        if not demo_gmail_provider or not demo_mailbox_status.get("connected"):
+            return {
+                "synced": False,
+                "message": "Real Gmail mailbox is not yet connected by owner. Run owner OAuth setup or set DEMO_GMAIL_REFRESH_TOKEN.",
+                "account_id": account_id,
+                "fetched": 0,
+                "new": 0,
+            }
+
+        if not demo_sync_service:
+            from mailagent.mail.sync_service import GmailSyncService
+            demo_sync_service = GmailSyncService(db)
+
+        stats = await demo_sync_service.sync_mailbox(
+            account_id=account_id,
+            provider=demo_gmail_provider,
+            limit=50,
+        )
+        demo_mailbox_status["last_sync"] = stats.get("synced_at")
+        return {
+            "synced": True,
+            "stats": stats,
+            "account_id": account_id,
+        }
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
 
 
 @app.post("/api/demo/reset")
@@ -728,6 +877,168 @@ async def reset_demo_data(
         }
     finally:
         pass  # Rate limiting is handled by demo_mode_auth_dependency
+
+
+# =========================================================================
+# Protected Owner-Only Mailbox Setup Endpoints (Require DASHBOARD_API_TOKEN)
+# Anonymous visitors/judges CANNOT access these endpoints.
+# =========================================================================
+
+# In-memory OAuth state storage with timestamps to prevent CSRF
+_oauth_states: Dict[str, datetime] = {}
+
+
+@app.get("/api/owner/gmail/auth-url", dependencies=[Depends(require_dashboard_auth)])
+async def get_owner_gmail_auth_url():
+    """
+    Owner-only endpoint: generate Google OAuth authorization URL for the dedicated demo mailbox.
+    Never accessible to anonymous judges.
+    """
+    import secrets
+    from mailagent.providers.gmail_provider import GmailOAuthFlow, DEFAULT_SCOPES
+
+    client_id = settings.demo_gmail_client_id or settings.google_client_id
+    client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
+    redirect_uri = settings.demo_gmail_redirect_uri or settings.google_redirect_uri
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Google Client ID and Secret must be configured in environment (GOOGLE_CLIENT_ID or DEMO_GMAIL_CLIENT_ID)",
+        )
+
+    # Generate cryptographic state token
+    state = secrets.token_urlsafe(32)
+    _oauth_states[state] = datetime.now(timezone.utc)
+
+    # Purge old states (> 15 min)
+    now = datetime.now(timezone.utc)
+    for k in list(_oauth_states.keys()):
+        if (now - _oauth_states[k]).total_seconds() > 900:
+            _oauth_states.pop(k, None)
+
+    auth_url = GmailOAuthFlow.get_authorization_url(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        scopes=DEFAULT_SCOPES,
+        state=state,
+    )
+
+    return {
+        "auth_url": auth_url,
+        "redirect_uri": redirect_uri,
+        "scopes": DEFAULT_SCOPES,
+        "state": state,
+    }
+
+
+class OwnerCallbackRequest(BaseModel):
+    code: str
+    state: Optional[str] = None
+
+
+@app.get("/auth/gmail/callback")
+async def receive_gmail_callback(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    """
+    Receive Google's browser redirect and return the code for the authenticated
+    owner API to exchange. The state remains stored until that API call.
+    """
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth authorization code")
+    if not state or state not in _oauth_states:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    return {
+        "message": "Authorization received. Submit this code to POST /api/owner/gmail/callback with the owner token.",
+        "code": code,
+        "state": state,
+    }
+
+
+@app.post("/api/owner/gmail/callback", dependencies=[Depends(require_dashboard_auth)])
+async def handle_owner_gmail_callback(payload: OwnerCallbackRequest):
+    """
+    Owner-only endpoint: exchange authorization code for refresh token, save credentials,
+    and initialize real Gmail synchronization.
+    Never accessible to anonymous judges.
+    """
+    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
+    from mailagent.providers.gmail_provider import GmailOAuthFlow, GmailProvider, DEFAULT_SCOPES
+    from mailagent.demo.demo_data import get_demo_account_id, get_demo_user_id
+    from mailagent.mail.sync_service import GmailSyncService
+
+    # Validate state if passed
+    if payload.state:
+        if payload.state not in _oauth_states:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+        _oauth_states.pop(payload.state, None)
+
+    client_id = settings.demo_gmail_client_id or settings.google_client_id
+    client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
+    redirect_uri = settings.demo_gmail_redirect_uri or settings.google_redirect_uri
+
+    try:
+        tokens = GmailOAuthFlow.exchange_code_for_token(
+            code=payload.code,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            scopes=DEFAULT_SCOPES,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to exchange OAuth code: {str(e)}")
+
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        # Warning: if user already authorized without prompt=consent, refresh_token might not be returned
+        logger.warning("No refresh_token returned by Google OAuth. Re-run with prompt=consent.")
+
+    # Initialize provider and get actual email address
+    provider = GmailProvider(tokens, scopes=DEFAULT_SCOPES)
+    if not await provider.connect():
+        raise HTTPException(status_code=400, detail="Failed to connect to Gmail with returned tokens")
+
+    profile = await provider.get_user_profile()
+    email_address = profile.get("emailAddress", "dedicated-demo@gmail.com") if profile else "dedicated-demo@gmail.com"
+
+    # Save to database
+    account_id = get_demo_account_id()
+    user_id = get_demo_user_id()
+
+    await db.save_account(
+        user_id=user_id,
+        provider="gmail",
+        email_address=email_address,
+        credentials=tokens,
+    )
+
+    demo_gmail_provider = provider
+    demo_mailbox_status["connected"] = True
+    demo_mailbox_status["email_address"] = email_address
+
+    # Initial sync
+    demo_sync_service = GmailSyncService(db)
+    sync_stats = await demo_sync_service.sync_mailbox(
+        account_id=account_id,
+        provider=provider,
+        limit=50,
+    )
+    demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
+
+    return {
+        "status": "connected",
+        "email_address": email_address,
+        "account_id": account_id,
+        "sync_stats": sync_stats,
+        "has_refresh_token": bool(refresh_token),
+        # Do NOT expose the secret tokens in the response!
+    }
 
 
 if __name__ == "__main__":

@@ -27,3 +27,14 @@ services:
         value: "5"
       - key: DEMO_RESET_ENDPOINT_ENABLED
         value: "true"
+      # Real Gmail Integration (Set these in Render dashboard or blueprint)
+      - key: DEMO_GMAIL_CLIENT_ID
+        sync: false
+      - key: DEMO_GMAIL_CLIENT_SECRET
+        sync: false
+      - key: DEMO_GMAIL_REDIRECT_URI
+        value: https://mailagent-public-demo.onrender.com/auth/gmail/callback
+      - key: DEMO_GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: DEMO_GMAIL_EMAIL
+        sync: false

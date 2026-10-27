@@ -67,12 +67,18 @@ class Settings(BaseSettings):
     dashboard_allowed_origins: str = ""
 
     # Public Demo Mode
-    # When enabled, serves a publicly accessible demo with synthetic data.
-    # Disables real email sync and uses OpenRouter for AI inference.
+    # When enabled, serves a publicly accessible demo.
+    # Uses owner-authorized Gmail account for real email integration and OpenRouter for AI.
     public_demo_mode: bool = False
     demo_rate_limit_per_minute: int = 30
     demo_max_concurrent_requests: int = 5
     demo_reset_endpoint_enabled: bool = True
+    demo_gmail_refresh_token: str = ""
+    demo_gmail_client_id: str = ""
+    demo_gmail_client_secret: str = ""
+    demo_gmail_redirect_uri: str = ""
+    demo_gmail_email: str = ""
+    demo_allow_public_send: bool = False
 
     @model_validator(mode="after")
     def validate_production_configuration(self) -> "Settings":

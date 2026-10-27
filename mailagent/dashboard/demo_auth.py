@@ -14,6 +14,7 @@ DEMO_ALLOWLISTED_ROUTES = {
     "/app/app.js",
     "/app/styles.css",
     "/api/demo/status",
+    "/api/demo/sync",
     "/api/demo/reset",
 }
 

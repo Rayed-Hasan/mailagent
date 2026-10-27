@@ -212,12 +212,23 @@ class SQLiteStorage(StorageInterface):
 
     # Email operations
     async def save_email(self, email: EmailMessage, account_id: str) -> str:
-        """Save an email to storage"""
+        """Save an email to storage. Returns existing email ID if message_id already exists for this account."""
         import uuid
-        email_id = str(uuid.uuid4())
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON")
+            db.row_factory = aiosqlite.Row
+
+            # Duplicate prevention check
+            cursor = await db.execute(
+                "SELECT id FROM emails WHERE account_id = ? AND message_id = ?",
+                (account_id, email.message_id)
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                return existing["id"]
+
+            email_id = str(uuid.uuid4())
             await db.execute("""
                 INSERT INTO emails (id, account_id, message_id, thread_id, sender, sender_email,
                                     subject, body, received_at, raw_headers)
@@ -236,6 +247,19 @@ class SQLiteStorage(StorageInterface):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM emails WHERE id = ?", (email_id,))
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
+
+    async def get_email_by_message_id(self, account_id: str, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get an email by account and provider message ID for deduplication"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM emails WHERE account_id = ? AND message_id = ?",
+                (account_id, message_id)
+            )
             row = await cursor.fetchone()
             if row:
                 return dict(row)

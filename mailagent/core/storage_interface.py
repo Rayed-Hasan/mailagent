@@ -37,6 +37,11 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    async def get_email_by_message_id(self, account_id: str, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get an email by account and provider message ID for deduplication"""
+        pass
+
+    @abstractmethod
     async def get_account_for_email(self, email_id: str) -> Optional[Dict[str, Any]]:
         """Get the owning account for an email"""
         pass

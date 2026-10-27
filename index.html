@@ -69,6 +69,7 @@
             <p class="hero-subtitle">MailAgent classifies the noise so you can focus on what deserves a reply.</p>
           </div>
           <div class="hero-actions">
+            <button class="secondary-button" id="syncButton"><span>↻</span> Sync Mailbox</button>
             <button class="secondary-button" id="connectButton">Connect inbox</button>
             <button class="primary-button" id="reviewButton"><span>✦</span> Review priority mail</button>
           </div>
@@ -117,6 +118,13 @@
             <p class="detail-meta"><strong id="detailSender"></strong> · <span id="detailTimestamp"></span></p>
             <div class="detail-tags"><span id="detailClassification"></span><span id="detailLabels"></span></div>
             <pre id="detailBody"></pre>
+            <div class="draft-action-box" style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(0,0,0,0.08);">
+              <button class="primary-button" id="generateDraftButton" type="button" style="margin-bottom: 0.75rem;">✦ Generate AI Reply Draft</button>
+              <div id="draftResultArea" style="display: none; background: rgba(0,0,0,0.02); padding: 1rem; border-radius: 8px; border: 1px solid rgba(0,0,0,0.06);">
+                <p class="eyebrow" style="margin-bottom: 0.5rem;" id="draftMeta"></p>
+                <div id="draftContent" style="white-space: pre-wrap; font-family: inherit; line-height: 1.5;"></div>
+              </div>
+            </div>
           </dialog>
 
           <aside class="focus-column">

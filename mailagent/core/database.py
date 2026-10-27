@@ -97,6 +97,14 @@ class Database:
         result = self.client.table("emails").select("*").eq("id", email_id).execute()
         return result.data[0] if result.data else None
 
+    async def get_email_by_message_id(self, account_id: str, message_id: str) -> Optional[Dict[str, Any]]:
+        """Get an email by account and provider message ID"""
+        if self.storage:
+            return await self.storage.get_email_by_message_id(account_id, message_id)
+
+        result = self.client.table("emails").select("*").eq("account_id", account_id).eq("message_id", message_id).execute()
+        return result.data[0] if result.data else None
+
     async def get_draft(self, draft_id: str) -> Optional[Dict[str, Any]]:
         """Get a draft by ID"""
         if self.storage:

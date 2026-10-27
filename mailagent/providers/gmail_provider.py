@@ -19,29 +19,51 @@ from mailagent.core.types import EmailMessage, EmailProvider
 from mailagent.core.config import settings
 
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly',
-          'https://www.googleapis.com/auth/gmail.modify',
-          'https://www.googleapis.com/auth/gmail.send']
+READONLY_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+]
+
+DEFAULT_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.compose',
+]
+
+FULL_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.send',
+]
+
+SCOPES = DEFAULT_SCOPES
 
 
 class GmailProvider(EmailProviderInterface):
     """Gmail provider with OAuth2 authentication"""
 
-    def __init__(self, credentials: Dict[str, Any]):
+    def __init__(self, credentials: Dict[str, Any], scopes: Optional[List[str]] = None):
         super().__init__(credentials)
         self.provider = EmailProvider.GMAIL
         self.service = None
         self.credentials = None
+        self.active_scopes = scopes or SCOPES
 
-        # Initialize credentials from stored token
-        if 'token' in credentials:
-            self.credentials = Credentials.from_authorized_user_info(credentials['token'], SCOPES)
+        # Initialize credentials from stored token or credentials dict
+        token_info = credentials.get('token') if isinstance(credentials.get('token'), dict) else credentials
+        if token_info and ('token' in token_info or 'refresh_token' in token_info):
+            try:
+                self.credentials = Credentials.from_authorized_user_info(token_info, self.active_scopes)
+            except Exception as e:
+                print(f"Failed to load credentials from token info: {e}")
 
     async def connect(self) -> bool:
-        """Connect to Gmail API"""
+        """Connect to Gmail API, refreshing credentials if expired"""
         try:
-            if not self.credentials or not self.credentials.valid:
-                if self.credentials and self.credentials.expired and self.credentials.refresh_token:
+            if not self.credentials:
+                return False
+
+            if not self.credentials.valid:
+                if self.credentials.refresh_token:
                     self.credentials.refresh(Request())
                 else:
                     return False
@@ -55,6 +77,18 @@ class GmailProvider(EmailProviderInterface):
     async def disconnect(self) -> None:
         """Disconnect from Gmail API"""
         self.service = None
+
+    async def get_user_profile(self) -> Optional[Dict[str, Any]]:
+        """Get the authorized user's profile info (e.g. email address)"""
+        if not self.service:
+            if not await self.connect():
+                return None
+        try:
+            profile = self.service.users().getProfile(userId='me').execute()
+            return profile
+        except Exception as e:
+            print(f"Error fetching Gmail profile: {e}")
+            return None
 
     async def fetch_emails(
         self,
@@ -409,40 +443,71 @@ class GmailOAuthFlow:
     """Handle Gmail OAuth2 authentication flow"""
 
     @staticmethod
-    def get_authorization_url() -> str:
-        """Generate OAuth2 authorization URL"""
+    def get_authorization_url(
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        state: Optional[str] = None,
+    ) -> str:
+        """Generate OAuth2 authorization URL with offline access to obtain refresh token"""
+        c_id = client_id or settings.google_client_id
+        c_secret = client_secret or settings.google_client_secret
+        r_uri = redirect_uri or settings.google_redirect_uri
+        auth_scopes = scopes or SCOPES
+
+        if not c_id or not c_secret:
+            raise ValueError("Google Client ID and Client Secret must be configured")
+
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret,
+                    "client_id": c_id,
+                    "client_secret": c_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [settings.google_redirect_uri]
+                    "redirect_uris": [r_uri]
                 }
             },
-            SCOPES
+            auth_scopes
         )
-        flow.redirect_uri = settings.google_redirect_uri
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        flow.redirect_uri = r_uri
+        kwargs = {"prompt": "consent", "access_type": "offline"}
+        if state:
+            kwargs["state"] = state
+        auth_url, _ = flow.authorization_url(**kwargs)
         return auth_url
 
     @staticmethod
-    def exchange_code_for_token(code: str) -> Dict[str, Any]:
-        """Exchange authorization code for access token"""
+    def exchange_code_for_token(
+        code: str,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Exchange authorization code for access token and refresh token"""
+        c_id = client_id or settings.google_client_id
+        c_secret = client_secret or settings.google_client_secret
+        r_uri = redirect_uri or settings.google_redirect_uri
+        auth_scopes = scopes or SCOPES
+
+        if not c_id or not c_secret:
+            raise ValueError("Google Client ID and Client Secret must be configured")
+
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret,
+                    "client_id": c_id,
+                    "client_secret": c_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [settings.google_redirect_uri]
+                    "redirect_uris": [r_uri]
                 }
             },
-            SCOPES
+            auth_scopes
         )
-        flow.redirect_uri = settings.google_redirect_uri
+        flow.redirect_uri = r_uri
         flow.fetch_token(code=code)
 
         credentials = flow.credentials

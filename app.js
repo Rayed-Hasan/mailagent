@@ -37,14 +37,20 @@ async function checkDemoMode() {
       if (data.demo_mode) {
         inboxState.isDemoMode = true;
         inboxState.accountId = data.demo_account_id;
-        setConnectionStatus("Demo mode active - synthetic data", true);
-        // Hide connect button in demo mode
+
+        if (data.gmail_connected) {
+          const email = data.demo_account_email || "dedicated Gmail";
+          setConnectionStatus(`Connected · ${email} (Real Gmail)`, true);
+        } else {
+          setConnectionStatus("Gmail disconnected · Owner authorization pending", false);
+        }
+
+        // Hide connect button in demo mode since judges do not log in
         if (connectButton) connectButton.style.display = "none";
         return true;
       }
     }
   } catch (error) {
-    // Not in demo mode or endpoint not available
     console.log("Not in demo mode or demo endpoint not accessible");
   }
 
@@ -269,6 +275,45 @@ async function openEmail(emailId) {
       ? `${classification.category} · Priority ${classification.priority_score ?? "unknown"}`
       : "Not classified";
     document.querySelector("#detailLabels").textContent = (email.labels || []).join(", ") || "No labels";
+
+    // Setup AI draft generator button in dialog
+    const generateBtn = document.querySelector("#generateDraftButton");
+    const draftArea = document.querySelector("#draftResultArea");
+    const draftMeta = document.querySelector("#draftMeta");
+    const draftContent = document.querySelector("#draftContent");
+
+    if (generateBtn && draftArea) {
+      draftArea.style.display = "none";
+      generateBtn.textContent = "✦ Generate AI Reply Draft";
+      generateBtn.disabled = false;
+
+      generateBtn.onclick = async () => {
+        generateBtn.disabled = true;
+        generateBtn.textContent = "Generating draft with AI...";
+        try {
+          const draftRes = await fetch(`${apiConfig.baseUrl}/api/demo/drafts/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email_id: email.id }),
+          });
+          if (!draftRes.ok) {
+            const err = await draftRes.json().catch(() => ({}));
+            throw new Error(err.detail || "Draft generation failed");
+          }
+          const draftData = await draftRes.json();
+          draftMeta.textContent = `Provider: ${draftData.provider} (${draftData.model}) · ${draftData.fallback ? "Deterministic Fallback" : "Live AI"}`;
+          draftContent.textContent = draftData.content;
+          draftArea.style.display = "block";
+          generateBtn.textContent = "✦ Regenerate Reply Draft";
+        } catch (e) {
+          showToast(e.message || "Failed to generate draft");
+          generateBtn.textContent = "✦ Generate AI Reply Draft";
+        } finally {
+          generateBtn.disabled = false;
+        }
+      };
+    }
+
     detailDialog.showModal();
   } catch (error) {
     showToast(error.message || "Could not load email");
@@ -315,6 +360,30 @@ loadMoreButton.addEventListener("click", () => {
   fetchInbox(true);
 });
 connectButton.addEventListener("click", connectInbox);
+
+const syncButton = document.querySelector("#syncButton");
+if (syncButton) {
+  syncButton.addEventListener("click", async () => {
+    syncButton.disabled = true;
+    syncButton.textContent = "Syncing Gmail...";
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/demo/sync`, { method: "POST" });
+      const data = await response.json();
+      if (data.synced) {
+        showToast(`Synced ${data.stats?.new || 0} new messages from Gmail.`);
+        await fetchInbox();
+      } else {
+        showToast(data.message || "Sync completed.");
+      }
+    } catch (e) {
+      showToast("Sync failed: " + e.message);
+    } finally {
+      syncButton.disabled = false;
+      syncButton.textContent = "↻ Sync Mailbox";
+    }
+  });
+}
+
 document.querySelector("#closeDetail").addEventListener("click", () => detailDialog.close());
 document.querySelector("#reviewButton").addEventListener("click", () => {
   document.querySelector(".mail-column").scrollIntoView({ behavior: "smooth", block: "center" });

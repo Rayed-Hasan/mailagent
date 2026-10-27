@@ -359,7 +359,7 @@ Finance Department""",
 
 
 def get_demo_emails() -> List[Dict[str, Any]]:
-    """Return the synthetic demo email data."""
+    """Return the synthetic demo email data (used only for backward-compatible fallback if real Gmail is not yet configured)."""
     return DEMO_EMAILS
 
 
@@ -370,9 +370,18 @@ def get_demo_user_id() -> str:
 
 def get_demo_account_id() -> str:
     """Return the demo account ID."""
+    from mailagent.core.config import settings
+    if settings.demo_gmail_email:
+        # Stable ID based on the configured Gmail email
+        import hashlib
+        h = hashlib.sha256(settings.demo_gmail_email.encode()).hexdigest()[:8]
+        return f"gmail-{h}"
     return DEMO_ACCOUNT_ID
 
 
 def get_demo_account_email() -> str:
     """Return the demo account email address."""
+    from mailagent.core.config import settings
+    if settings.demo_gmail_email:
+        return settings.demo_gmail_email
     return DEMO_ACCOUNT_EMAIL

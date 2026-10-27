@@ -99,10 +99,11 @@ class TestDemoModeSecurity:
 
     @pytest.mark.asyncio
     async def test_demo_status_endpoint_includes_disclaimer(self):
-        """Test that demo status endpoint includes clear disclaimer."""
+        """Test that demo status endpoint returns demo configuration and mailbox status."""
         with patch.object(settings, "public_demo_mode", True):
             with patch.object(settings, "openrouter_api_key", ""):
                 with patch.object(dashboard, "db", MagicMock()):
+                    dashboard.db.get_emails_by_account = AsyncMock(return_value=[])
                     with patch.object(dashboard.demo_rate_limiter, "check_rate_limit", AsyncMock(return_value=(True, None))):
                         with patch.object(dashboard.demo_rate_limiter, "release_request", AsyncMock()):
                             response = await dashboard.get_demo_status(
@@ -110,8 +111,8 @@ class TestDemoModeSecurity:
                                 user_id="demo-user",
                             )
                             assert response["demo_mode"] is True
-                            assert "synthetic data" in response["note"]
-                            assert "real emails are sent" in response["note"].lower()
+                            assert "demo mailbox" in response["note"].lower()
+                            assert "gmail_connected" in response
 
     @pytest.mark.asyncio
     async def test_demo_mode_rate_limiting(self):

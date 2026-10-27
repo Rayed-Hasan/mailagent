@@ -1,183 +1,208 @@
-# Public Demo Deployment
+# Public Demo Deployment — Real Gmail Integration
 
-This deployment profile is for a no-login hackathon demo with synthetic email
-data. It is intentionally separate from the enterprise deployment profile.
+This deployment profile configures MailAgent for a no-login public judge demonstration integrated with a **dedicated, real Gmail account**.
 
-## Architecture blockers found and resolved
+Judges can open the public website without creating an account or logging in, view real test messages, filter by AI priority and category, and generate reply drafts using OpenRouter (with deterministic fallback).
 
-Before this change, `render.yaml` provisioned a web service, Celery worker,
-Celery beat, and Redis, and configured the web service for Supabase/Celery.
-Production settings also rejected startup without enterprise credentials.
-Demo mode could additionally construct its SQLite secret store from the OS
-keychain or `MAILAGENT_ENCRYPTION_KEY`.
+---
 
-The public profile now uses one Render web service, SQLite in `/tmp`, the
-existing local/in-process path, and a demo-only in-memory encryption key.
-No Gmail, SMTP, Supabase, Redis, Celery, Claude, or OpenRouter credential is
-required.
+## 1. Google Cloud Project & Gmail API Setup
 
-## Required environment variables
+1. **Create/Select a Google Cloud Project**:
+   - Go to the [Google Cloud Console](https://console.cloud.google.com/).
+   - Create a project named `MailAgent-Demo`.
+2. **Enable Gmail API**:
+   - Navigate to **APIs & Services > Library**.
+   - Search for **Gmail API** and click **Enable**.
+3. **Configure OAuth Consent Screen**:
+   - User Type: **External**.
+   - App name: `MailAgent Demo`.
+   - User support email: Select your dedicated demo Gmail address.
+   - Test Users: Add the dedicated test Gmail address (e.g. `your-dedicated-demo@gmail.com`).
+4. **Required OAuth Scopes**:
+   - `https://www.googleapis.com/auth/gmail.readonly` (read-only inbox access for classification and synchronization).
+   - `https://www.googleapis.com/auth/gmail.compose` (create and view drafts).
+5. **Create OAuth 2.0 Client Credentials**:
+   - Navigate to **APIs & Services > Credentials > Create Credentials > OAuth client ID**.
+   - Application Type: **Web application**.
+   - Name: `MailAgent Web Client`.
+   - Authorized redirect URIs:
+     - Local testing: `http://localhost:8000/auth/gmail/callback` (or `http://127.0.0.1:8766/auth/gmail/callback`)
+     - Deployed Render URL: `https://mailagent-public-demo.onrender.com/auth/gmail/callback`
+   - Copy the generated `Client ID` and `Client Secret`.
 
-These are the only required Render settings:
+---
 
+## 2. Environment Variables
+
+### Core Demo Settings
 ```text
 ENVIRONMENT=production
 PUBLIC_DEMO_MODE=true
 STORAGE_BACKEND=sqlite
 TASK_QUEUE_BACKEND=local
 DEMO_SQLITE_DB_PATH=/tmp/mailagent-public-demo.db
+DASHBOARD_ALLOWED_ORIGINS=*
 ```
 
-The `render.yaml` file supplies these values. The demo does not require:
-
-- `DASHBOARD_API_TOKEN`
-- `DASHBOARD_USER_ID`
-- `MAILAGENT_ENCRYPTION_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `REDIS_URL`
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND`
-- Gmail OAuth credentials
-- SMTP credentials
-- Claude/OpenAI/Google AI credentials
-
-## Optional environment variables
-
+### Real Gmail Credentials (Render Persistent Configuration)
+To persist authorization across Render restarts and redeployments without paid add-ons, set:
 ```text
-OPENROUTER_API_KEY=...
+DEMO_GMAIL_CLIENT_ID=<your-google-client-id>
+DEMO_GMAIL_CLIENT_SECRET=<your-google-client-secret>
+DEMO_GMAIL_REDIRECT_URI=https://mailagent-public-demo.onrender.com/auth/gmail/callback
+DEMO_GMAIL_REFRESH_TOKEN=<your-google-refresh-token>
+DEMO_GMAIL_EMAIL=<your-dedicated-demo-account>@gmail.com
+```
+
+### Owner Admin Security
+Protects owner-only mailbox connection, setup, and sensitive configuration:
+```text
+DASHBOARD_API_TOKEN=<strong-secret-token-for-owner-only>
+DASHBOARD_USER_ID=demo-owner
+```
+
+### AI Inference (OpenRouter)
+```text
+OPENROUTER_API_KEY=<optional-openrouter-key>
 OPENROUTER_MODEL=google/gemma-2-9b-it:free
+```
+*Note: If `OPENROUTER_API_KEY` is not set or rate limits occur, MailAgent automatically uses the clearly labelled deterministic fallback provider.*
+
+### Public Safeguards
+```text
 DEMO_RATE_LIMIT_PER_MINUTE=30
 DEMO_MAX_CONCURRENT_REQUESTS=5
+DEMO_ALLOW_PUBLIC_SEND=false
 DEMO_RESET_ENDPOINT_ENABLED=true
 ```
 
-`OPENROUTER_API_KEY` is server-side only and is never returned by the API.
-When it is absent, or when OpenRouter fails, the demo uses a clearly labelled
-deterministic fallback provider. The demo never selects another paid provider
-implicitly.
+---
 
-## Exact Render configuration
+## 3. Owner-Only Mailbox Authorization
 
-Use the repository's `render.yaml` blueprint:
+Judges never connect their personal accounts or log in. The owner authorizes the single dedicated demo Gmail account once:
 
-```text
-Service type: Web Service
-Runtime: Python
-Plan: Free (or another single web-service plan)
-Build command: pip install -r requirements.txt
-Start command: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
-Health check path: /health
-```
+### Method A: Environment Configuration (Recommended for Render)
+1. Acquire a refresh token for the dedicated Gmail account (e.g., using the owner OAuth flow or Google OAuth Playground with your Client ID/Secret).
+2. Set `DEMO_GMAIL_REFRESH_TOKEN`, `DEMO_GMAIL_CLIENT_ID`, `DEMO_GMAIL_CLIENT_SECRET`, and `DEMO_GMAIL_EMAIL` in Render environment variables.
+3. Upon boot, MailAgent automatically connects to Gmail, verifies the token, and syncs test messages into the priority inbox.
 
-Do not add worker, private service, Redis, Supabase, or database services.
-After Render creates the service, its public URL is the API and frontend URL.
-The public landing page is `/`; the demo dashboard is `/app/index.html`.
+### Method B: Authenticated Owner Endpoint (Browser)
+1. Owner opens `GET /api/owner/gmail/auth-url` with header:
+   ```text
+   Authorization: Bearer <DASHBOARD_API_TOKEN>
+   ```
+2. The endpoint returns a one-time Google OAuth authorization URL with CSRF state protection.
+3. Owner authorizes the dedicated Gmail account in the browser.
+4. Google redirects to `GET /auth/gmail/callback`; the owner then submits the returned code and state to `POST /api/owner/gmail/callback` (authenticated).
+5. MailAgent exchanges the code for a refresh token, saves it encrypted in SQLite, and performs the initial mailbox synchronization.
 
-## Local verification
+---
 
-Run the same profile locally without any external credentials:
+## 4. Public Routes vs Protected Routes
 
-```powershell
-$env:ENVIRONMENT = "production"
-$env:PUBLIC_DEMO_MODE = "true"
-$env:STORAGE_BACKEND = "sqlite"
-$env:TASK_QUEUE_BACKEND = "local"
-$env:DEMO_SQLITE_DB_PATH = "$env:TEMP\mailagent-public-demo-test.db"
-Remove-Item -Force -ErrorAction SilentlyContinue $env:DEMO_SQLITE_DB_PATH
-python -m uvicorn mailagent.dashboard.app:app --host 127.0.0.1 --port 8766
-```
+| Endpoint | Access Level | Description |
+|---|---|---|
+| `GET /` | Public | Product landing page |
+| `GET /app/index.html` | Public | Priority inbox interface for judges |
+| `GET /app/app.js`, `styles.css` | Public | Static UI assets |
+| `GET /health` | Public | Service health check |
+| `GET /api/demo/status` | Public | Real Gmail connection status, sync time, model |
+| `GET /api/accounts` | Public (Demo) | Returns single configured demo mailbox metadata |
+| `GET /api/emails/with-classifications` | Public (Demo) | Priority inbox data with sorting and filters |
+| `GET /api/emails/{id}` | Public (Demo) | View email details, category, reason |
+| `POST /api/demo/sync` | Public (Demo) | Triggers mailbox synchronization (rate limited) |
+| `POST /api/demo/drafts/generate` | Public (Demo) | Generate AI reply draft (OpenRouter or fallback) |
+| `POST /api/drafts/approve` | Public (Demo) | Approve draft in review queue |
+| `POST /api/demo/send` | Restricted | Public sending is **disabled** (`403 Forbidden`) by default |
+| `GET /api/owner/gmail/auth-url` | **Owner Only** | Requires `DASHBOARD_API_TOKEN` |
+| `POST /api/owner/gmail/callback` | **Owner Only** | Requires `DASHBOARD_API_TOKEN` |
+| `GET /api/emails` (raw) | **Owner Only** | Requires `DASHBOARD_API_TOKEN` |
+| `GET /api/privacy/export` | **Owner Only** | Requires `DASHBOARD_API_TOKEN` |
+| `POST /api/kill-switch` | **Owner Only** | Requires `DASHBOARD_API_TOKEN` |
 
-Then open `http://127.0.0.1:8766/`.
+---
 
-## Demo security boundaries
+## 5. Persistence on Render Free Tier
 
-- `/` and `/health` are public.
-- `/app/index.html`, `/app/app.js`, and `/app/styles.css` are public frontend
-  assets.
-- Public demo endpoints use a fixed synthetic user/account and a per-client
-  rate limiter.
-- `/api/accounts`, classified inbox browsing, email details, demo draft
-  generation, draft approval, simulated send, demo status, and demo reset are
-  available only through the demo dependency when `PUBLIC_DEMO_MODE=true`.
-- Raw email listing, privacy data, kill-switch, classifications, audit log,
-  provider settings, voice profile, rate limits, and stats remain protected by
-  the normal dashboard authentication dependency.
-- The demo account is `judge@example.com` and contains only synthetic data.
-- Draft approval and `/api/demo/send` update demo state only. They never call
-  Gmail, IMAP, SMTP, or a sending provider.
-- `/tmp` is ephemeral on Render. A restart can reset the demo, which is
-  acceptable and intentional for a hackathon demo.
-- The demo-only encryption key protects the synthetic database record in
-  process; it must not be used for a real deployment.
+On Render's free tier, `/tmp` is ephemeral and restarts occur during deploys or idle periods.
 
-## Useful demo endpoints
+1. **How Mailbox Persists Across Redeployments**:
+   - Because `DEMO_GMAIL_REFRESH_TOKEN` and client credentials reside in Render's environment configuration, MailAgent recreates and synchronizes the local SQLite database automatically whenever the instance restarts.
+   - Deduplication guarantees that re-synchronizing Gmail messages never produces duplicate emails or classifications in SQLite.
+2. **Local Windows Persistence**:
+   - Local runs store the SQLite database at `mailagent.db` or the configured `sqlite_db_path`, preserving all messages and credentials persistently across process restarts.
 
-```text
-GET  /api/demo/status
-GET  /api/accounts
-GET  /api/emails/with-classifications?account_id=demo-account-001
-GET  /api/emails/{email_id}
-POST /api/demo/drafts/generate
-POST /api/drafts/approve
-POST /api/demo/send
-POST /api/demo/reset
-```
+---
 
-`POST /api/demo/drafts/generate` accepts
-`{"email_id":"..."}`. It returns `provider`, `model`, and `fallback` so a
-judge can see whether the response came from OpenRouter or deterministic demo
-logic.
+## 6. Verification Status
 
-## Tests and actual results
+### Implemented & Verified in Test Suite
+- **113/113 automated unit & integration tests passing**:
+  - OAuth authorization URL generation with cryptographic state.
+  - Authorization code exchange and token expiry refresh.
+  - Real message body/header normalization into `EmailMessage`.
+  - SQLite database deduplication (`save_email` returns existing ID on identical `message_id`).
+  - Gmail sync service idempotent resynchronization.
+  - Zero-login judge access to `/api/demo/status`, `/api/accounts`, and `/api/emails/with-classifications`.
+  - Denial of anonymous visitors from `/api/owner/gmail/*` and protected endpoints (`401 Unauthorized`).
+  - Prevention of anonymous email sending (`403 Forbidden`).
+  - OpenRouter inference handling with labelled deterministic fallback (`fallback: true`).
 
-Focused validation completed:
+### Live Testing Steps (Once Owner Credentials are Configured)
+1. Send 5–6 genuine test emails to your dedicated Gmail account from different external addresses (e.g., invoices, meeting requests, urgent questions).
+2. Set `DEMO_GMAIL_REFRESH_TOKEN`, `DEMO_GMAIL_CLIENT_ID`, `DEMO_GMAIL_CLIENT_SECRET`, and `DEMO_GMAIL_EMAIL` in `.env` (or Render dashboard).
+3. Start the dashboard or click **Sync Mailbox** in the UI.
+4. Verify that the 5–6 real test emails appear in the priority inbox sorted by AI priority.
+5. Open an email and click **Generate AI Reply Draft** to verify live OpenRouter draft generation.
 
-```text
-python -m pytest -q tests/test_demo_mode.py tests/test_dashboard_auth.py tests/test_deployment_config.py
-17 passed, 4 warnings
-```
+## 7. First Render Redeploy Checklist
 
-The warnings are existing FastAPI `on_event` deprecation warnings.
+The repository is configured as one Render web service. Do not create a separate
+frontend service.
 
-The isolated no-credential server was started with production settings and
-the following checks passed:
+1. Review the working tree and commit the intended changes:
+   ```powershell
+   git diff --check
+   git add render.yaml mailagent .env.example PUBLIC_DEMO_DEPLOYMENT.md tests
+   git commit -m "Prepare live Gmail OAuth deployment"
+   git push origin main
+   ```
+   Never stage `.env`, refresh tokens, client secrets, or API keys.
+2. In Render, redeploy the `mailagent-public-demo` service from the new `main`
+   commit. The service must use:
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT`
+   - Health check: `/health`
+3. Configure these non-secret production values:
+   ```text
+   ENVIRONMENT=production
+   PUBLIC_DEMO_MODE=true
+   STORAGE_BACKEND=sqlite
+   TASK_QUEUE_BACKEND=local
+   DEMO_SQLITE_DB_PATH=/tmp/mailagent-public-demo.db
+   DEMO_GMAIL_REDIRECT_URI=https://mailagent-public-demo.onrender.com/auth/gmail/callback
+   ```
+4. Configure these owner-only values before enabling Gmail:
+   ```text
+   DASHBOARD_API_TOKEN=<strong-random-token>
+   DASHBOARD_USER_ID=demo-owner
+   DEMO_GMAIL_CLIENT_ID=<Google OAuth client ID>
+   DEMO_GMAIL_CLIENT_SECRET=<Google OAuth client secret>
+   DEMO_GMAIL_REFRESH_TOKEN=<owner-authorized refresh token>
+   DEMO_GMAIL_EMAIL=<dedicated-demo-address>
+   ```
+5. In Google Cloud, add exactly this Authorized redirect URI:
+   ```text
+   https://mailagent-public-demo.onrender.com/auth/gmail/callback
+   ```
+6. Verify `/health`, `/`, `/app/index.html`, and
+   `/auth/gmail/callback` after deployment. The owner authorization URL and
+   code-exchange routes must continue to require the bearer token:
+   `GET /api/owner/gmail/auth-url` and
+   `POST /api/owner/gmail/callback`.
 
-```text
-GET /health                                      200
-GET /api/demo/status                             200, fallback provider
-GET /api/accounts                                200
-GET /api/emails/with-classifications             200, 12 synthetic emails
-GET /api/emails                                  503, protected without auth
-GET /api/emails/{email_id}                       200, synthetic detail
-POST /api/demo/drafts/generate                   200, deterministic fallback
-POST /api/drafts/approve                         200, approved
-POST /api/demo/send                              200, simulated=true, sent
-POST /api/demo/reset                             200, reset=true
-```
-
-Python compilation and `git diff --check` also passed.
-
-The full regression suite completed after the compatibility fix:
-
-```text
-python -m pytest -q
-104 passed, 5 warnings
-```
-
-There is no production frontend build command to run: the frontend is a
-static HTML/CSS/JavaScript surface with no root `package.json` or bundler.
-The static assets were syntax-checked and served successfully during smoke
-testing.
-
-## Remaining blockers before launch
-
-1. Create the Render service from the updated blueprint and confirm the
-   generated public URL.
-2. Verify Render's free-plan filesystem behavior and cold-start timing with
-   the real service.
-3. Decide whether to set an OpenRouter key. It is optional; the deterministic
-   fallback is the safe no-cost default.
-4. Perform one manual browser smoke test against the deployed URL.
-5. Do not expose production dashboard credentials or switch this service to
-   Supabase/Celery without creating a separate enterprise deployment.
+The Render process binds to `0.0.0.0` and Render's `$PORT`. The Windows desktop
+launcher intentionally remains loopback-only (`127.0.0.1`) and does not use this
+production bind configuration.

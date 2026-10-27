@@ -42,6 +42,28 @@ class TestDemoModeSecurity:
                     assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_owner_auth_rejects_missing_dashboard_user_id(self):
+        from mailagent.dashboard.auth import require_dashboard_auth
+
+        with patch.object(settings, "dashboard_api_token", "configured-token"):
+            with patch.object(settings, "dashboard_user_id", ""):
+                with pytest.raises(HTTPException) as exc:
+                    await require_dashboard_auth(authorization="Bearer configured-token")
+                assert exc.value.status_code == 503
+                assert exc.value.detail == "Dashboard authentication is not configured"
+
+    @pytest.mark.asyncio
+    async def test_owner_auth_accepts_configured_token_and_user_id(self):
+        from mailagent.dashboard.auth import require_dashboard_auth
+
+        with patch.object(settings, "dashboard_api_token", "configured-token"):
+            with patch.object(settings, "dashboard_user_id", "demo-owner"):
+                result = await require_dashboard_auth(
+                    authorization="Bearer configured-token"
+                )
+                assert result == "demo-owner"
+
+    @pytest.mark.asyncio
     async def test_demo_mode_uses_separate_database(self):
         """Test that demo mode uses a separate SQLite database."""
         with patch.object(settings, "public_demo_mode", True):

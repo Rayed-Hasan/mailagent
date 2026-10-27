@@ -62,6 +62,10 @@ DASHBOARD_API_TOKEN=<strong-secret-token-for-owner-only>
 DASHBOARD_USER_ID=demo-owner
 ```
 
+`DASHBOARD_API_TOKEN` and `DASHBOARD_USER_ID` are both required. The token is
+the secret bearer credential; `DASHBOARD_USER_ID` is the non-secret principal
+identifier returned internally after successful authentication.
+
 ### AI Inference (OpenRouter)
 ```text
 OPENROUTER_API_KEY=<optional-openrouter-key>

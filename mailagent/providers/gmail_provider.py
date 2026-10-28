@@ -463,7 +463,7 @@ class GmailOAuthFlow:
 
         flow = InstalledAppFlow.from_client_config(
             {
-                "installed": {
+                "web": {
                     "client_id": c_id,
                     "client_secret": c_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
@@ -497,9 +497,10 @@ class GmailOAuthFlow:
         if not c_id or not c_secret:
             raise ValueError("Google Client ID and Client Secret must be configured")
 
+        client_type = "web" if "web" in [r_uri] or r_uri.startswith("http") else "installed"
         flow = InstalledAppFlow.from_client_config(
             {
-                "installed": {
+                "web": {
                     "client_id": c_id,
                     "client_secret": c_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",

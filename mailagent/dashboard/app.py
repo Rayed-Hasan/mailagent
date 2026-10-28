@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Any
 import logging
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
@@ -219,7 +219,11 @@ async def root():
 @app.get("/health")
 async def health():
     """Unauthenticated process health check for the hosting platform."""
-    return {"status": "ok", "demo_mode": settings.public_demo_mode}
+    result = {"status": "ok", "demo_mode": settings.public_demo_mode}
+    if settings.public_demo_mode:
+        result["gmail_connected"] = demo_mailbox_status.get("connected", False)
+        result["ai_provider"] = "openrouter" if settings.openrouter_api_key else "fallback"
+    return result
 
 
 # Demo mode dependency override for public access
@@ -891,6 +895,150 @@ async def reset_demo_data(
         }
     finally:
         pass  # Rate limiting is handled by demo_mode_auth_dependency
+
+
+@app.get("/api/demo/summary")
+async def get_demo_summary(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Return real inbox summary counts for the dashboard sidebar and summary cards."""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    client_ip = await get_client_ip(request)
+    try:
+        from mailagent.demo.demo_data import get_demo_account_id
+        account_id = get_demo_account_id()
+
+        # Get all emails with classifications
+        result = await db.get_emails_with_classifications(
+            account_id=account_id, limit=1000, offset=0
+        )
+        emails = result.get("emails", [])
+        total = result.get("total", 0)
+
+        # Compute real counts
+        high_priority = 0
+        needs_reply = 0
+        classified = 0
+        labels_count = {}
+
+        for email in emails:
+            c = email.get("classification")
+            if c:
+                classified += 1
+                score = c.get("priority_score", 0) or 0
+                if score >= 70:
+                    high_priority += 1
+                action = c.get("action", "")
+                if action in ("reply", "draft_only"):
+                    needs_reply += 1
+            for lbl in email.get("labels", []):
+                labels_count[lbl] = labels_count.get(lbl, 0) + 1
+
+        # Count drafts
+        drafts = await db.get_pending_drafts(account_id)
+        draft_count = len(drafts)
+
+        return {
+            "total": total,
+            "classified": classified,
+            "high_priority": high_priority,
+            "needs_reply": needs_reply,
+            "draft_count": draft_count,
+            "labels": labels_count,
+            "gmail_connected": demo_mailbox_status.get("connected", False),
+            "last_sync": demo_mailbox_status.get("last_sync"),
+            "email_address": demo_mailbox_status.get("email_address"),
+        }
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
+
+
+@app.post("/api/demo/classify")
+async def classify_demo_emails(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Trigger AI classification on unclassified messages in the demo mailbox."""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=403, detail="Demo mode is not enabled")
+
+    client_ip = await get_client_ip(request)
+    try:
+        from mailagent.demo.demo_data import get_demo_account_id
+        from mailagent.classifier.email_classifier import EmailClassifier
+        from mailagent.demo.demo_provider import get_demo_provider_registry
+        from mailagent.core.label_mapper import LabelMapper
+        from mailagent.core.types import EmailMessage as EmailMessageType
+
+        account_id = get_demo_account_id()
+        registry = get_demo_provider_registry()
+        classifier = EmailClassifier(provider_registry=registry)
+        label_mapper = LabelMapper()
+
+        # Fetch emails that are not yet classified
+        all_emails = await db.get_emails_by_account(account_id, limit=100)
+        classified_count = 0
+        skipped_count = 0
+        error_count = 0
+        provider_used = "fallback"
+
+        if settings.openrouter_api_key:
+            provider_used = "openrouter"
+
+        for email_row in all_emails:
+            existing = await db.get_classification(email_row["id"])
+            if existing:
+                skipped_count += 1
+                continue
+
+            try:
+                import json as _json
+                raw_headers = email_row.get("raw_headers", "{}")
+                if isinstance(raw_headers, str):
+                    try:
+                        raw_headers = _json.loads(raw_headers)
+                    except _json.JSONDecodeError:
+                        raw_headers = {}
+
+                email_msg = EmailMessageType(
+                    message_id=email_row["message_id"],
+                    thread_id=email_row.get("thread_id"),
+                    sender=email_row.get("sender", ""),
+                    sender_email=email_row.get("sender_email", ""),
+                    subject=email_row.get("subject", ""),
+                    body=email_row.get("body", ""),
+                    received_at=email_row.get("received_at", "2024-01-01T00:00:00"),
+                    raw_headers=raw_headers,
+                )
+                classification = await classifier.classify(email_msg)
+                classification.email_id = email_row["id"]
+                await db.save_classification(classification)
+
+                labels = label_mapper.category_to_labels(
+                    classification.category, classification.priority_score
+                )
+                if labels:
+                    await db.save_email_labels(email_row["id"], labels, source="system")
+
+                classified_count += 1
+            except Exception as exc:
+                logger.error("Classification failed for email %s (%s)", email_row["id"], type(exc).__name__)
+                error_count += 1
+
+        return {
+            "classified": classified_count,
+            "skipped": skipped_count,
+            "errors": error_count,
+            "total": len(all_emails),
+            "provider": provider_used,
+            "model": settings.openrouter_model if settings.openrouter_api_key else "fallback-deterministic",
+        }
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
+
 
 
 # =========================================================================

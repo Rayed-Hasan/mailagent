@@ -14,7 +14,7 @@ const apiConfig = {
     || sessionStorage.getItem("mailagent.dashboardToken") || "",
 };
 
-const inboxState = { accountId: null, offset: 0, total: 0, loading: false, isDemoMode: false };
+const inboxState = { accountId: null, offset: 0, total: 0, loading: false, isDemoMode: false, allEmails: [] };
 
 function setConnectionStatus(message, connected = false) {
   connectionStatus.replaceChildren();
@@ -47,6 +47,10 @@ async function checkDemoMode() {
 
         // Hide connect button in demo mode since judges do not log in
         if (connectButton) connectButton.style.display = "none";
+
+        // Update profile card with demo account info
+        updateProfileCard(data.demo_account_email, data.gmail_connected);
+
         return true;
       }
     }
@@ -55,6 +59,25 @@ async function checkDemoMode() {
   }
 
   return false;
+}
+
+function updateProfileCard(email, connected) {
+  const profileDiv = document.querySelector(".profile");
+  if (!profileDiv) return;
+  const nameEl = profileDiv.querySelector("strong");
+  const emailEl = profileDiv.querySelector("span");
+  if (email && connected) {
+    const name = email.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    if (nameEl) nameEl.textContent = name;
+    if (emailEl) emailEl.textContent = email;
+    const avatar = profileDiv.querySelector(".profile-avatar");
+    if (avatar) avatar.textContent = name.slice(0, 2).toUpperCase();
+  } else {
+    if (nameEl) nameEl.textContent = "Demo Mailbox";
+    if (emailEl) emailEl.textContent = email || "not connected";
+    const avatar = profileDiv.querySelector(".profile-avatar");
+    if (avatar) avatar.textContent = "DM";
+  }
 }
 
 function setMailListState(message, isError = false) {
@@ -115,21 +138,92 @@ function appendTag(parent, text, className = "") {
   parent.appendChild(tag);
 }
 
+// =====================================================================
+// updateInboxSummary — module-scope function (was incorrectly nested)
+// Updates summary cards AND sidebar counts from real data
+// =====================================================================
+function updateInboxSummary(emails, total) {
+  // Summary cards
+  const sortedEl = document.querySelector("#sortedCount");
+  const replyEl = document.querySelector("#replyCount");
+  const priorityEl = document.querySelector("#priorityCount");
+
+  if (sortedEl) sortedEl.textContent = String(total);
+
+  const replyCount = emails.filter((email) => needsReply(classificationFor(email))).length;
+  if (replyEl) replyEl.textContent = String(replyCount);
+
+  const priorityCount = emails.filter((email) => (classificationFor(email).priority_score || 0) >= 70).length;
+  if (priorityEl) priorityEl.textContent = String(priorityCount);
+
+  // Update inbox count in sidebar
+  const inboxNav = document.querySelector('a.nav-item[href="#inbox"] b');
+  if (inboxNav) inboxNav.textContent = String(total);
+
+  // Store emails for summary-based sidebar updates
+  inboxState.allEmails = emails;
+}
+
+// =====================================================================
+// Update sidebar counts from real /api/demo/summary data
+// =====================================================================
+async function updateSidebarFromApi() {
+  if (!inboxState.isDemoMode) return;
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/demo/summary`);
+    if (!response.ok) return;
+    const data = await response.json();
+
+    // Update sidebar inbox count
+    const inboxNav = document.querySelector('a.nav-item[href="#inbox"] b');
+    if (inboxNav) inboxNav.textContent = String(data.total || 0);
+
+    // Update sidebar draft count
+    const draftNav = document.querySelector('a.nav-item[href="#drafts"] b');
+    if (draftNav) draftNav.textContent = String(data.draft_count || 0);
+
+    // Update label counts
+    const labels = data.labels || {};
+    // Map label names to sidebar elements
+    const labelMap = {
+      "follow-up": ["Needs Reply", "Important"],
+      "read-later": ["Read Later"],
+      "newsletters": ["Newsletter"],
+    };
+
+    for (const [hash, labelNames] of Object.entries(labelMap)) {
+      const navEl = document.querySelector(`a.nav-item[href="#${hash}"] b`);
+      if (navEl) {
+        let count = 0;
+        for (const name of labelNames) {
+          count += labels[name] || 0;
+        }
+        navEl.textContent = count > 0 ? String(count) : "";
+      }
+    }
+
+    // Update summary cards from API data too
+    const sortedEl = document.querySelector("#sortedCount");
+    const replyEl = document.querySelector("#replyCount");
+    const priorityEl = document.querySelector("#priorityCount");
+    if (sortedEl) sortedEl.textContent = String(data.total || 0);
+    if (replyEl) replyEl.textContent = String(data.needs_reply || 0);
+    if (priorityEl) priorityEl.textContent = String(data.high_priority || 0);
+
+    // Update connection status if needed
+    if (data.gmail_connected && data.email_address) {
+      setConnectionStatus(`Connected · ${data.email_address} (Real Gmail)`, true);
+    }
+  } catch (e) {
+    // Sidebar update is best-effort
+  }
+}
+
 function renderRealEmails(emails, append = false) {
   if (!append) mailList.replaceChildren();
   if (!emails.length && !append) {
     setMailListState("No messages match these filters.");
     return;
-  }
-
-  function updateInboxSummary(emails, total) {
-    document.querySelector("#sortedCount").textContent = String(total);
-    document.querySelector("#replyCount").textContent = String(
-      emails.filter((email) => needsReply(classificationFor(email))).length,
-    );
-    document.querySelector("#priorityCount").textContent = String(
-      emails.filter((email) => (classificationFor(email).priority_score || 0) >= 70).length,
-    );
   }
 
   emails.forEach((email) => {
@@ -271,9 +365,14 @@ async function openEmail(emailId) {
     document.querySelector("#detailSubject").textContent = email.subject || "(No subject)";
     document.querySelector("#detailTimestamp").textContent = formatDate(email.received_at);
     document.querySelector("#detailBody").textContent = email.body || "(No message content)";
-    document.querySelector("#detailClassification").textContent = classification.category
-      ? `${classification.category} · Priority ${classification.priority_score ?? "unknown"}`
-      : "Not classified";
+
+    // Show classification details with reason
+    const classEl = document.querySelector("#detailClassification");
+    if (classification.category) {
+      classEl.textContent = `${classification.category} · Priority ${classification.priority_score ?? "unknown"} · ${classification.reason || ""}`;
+    } else {
+      classEl.textContent = "Not classified";
+    }
     document.querySelector("#detailLabels").textContent = (email.labels || []).join(", ") || "No labels";
 
     // Setup AI draft generator button in dialog
@@ -305,6 +404,8 @@ async function openEmail(emailId) {
           draftContent.textContent = draftData.content;
           draftArea.style.display = "block";
           generateBtn.textContent = "✦ Regenerate Reply Draft";
+          // Refresh sidebar draft count
+          await updateSidebarFromApi();
         } catch (e) {
           showToast(e.message || "Failed to generate draft");
           generateBtn.textContent = "✦ Generate AI Reply Draft";
@@ -350,7 +451,7 @@ function togglePalette(open) {
 }
 
 document.querySelectorAll("#categoryFilter, #labelFilter, #priorityFilter, #replyFilter, #sortInbox").forEach((control) => {
-  control.addEventListener(control.id === "labelFilter" ? "change" : "change", () => {
+  control.addEventListener("change", () => {
     inboxState.offset = 0;
     fetchInbox();
   });
@@ -371,7 +472,9 @@ if (syncButton) {
       const data = await response.json();
       if (data.synced) {
         showToast(`Synced ${data.stats?.new || 0} new messages from Gmail.`);
+        inboxState.offset = 0;
         await fetchInbox();
+        await updateSidebarFromApi();
       } else {
         showToast(data.message || "Sync completed.");
       }
@@ -385,9 +488,32 @@ if (syncButton) {
 }
 
 document.querySelector("#closeDetail").addEventListener("click", () => detailDialog.close());
-document.querySelector("#reviewButton").addEventListener("click", () => {
-  document.querySelector(".mail-column").scrollIntoView({ behavior: "smooth", block: "center" });
+
+// Review Priority Mail — triggers real AI classification then refreshes inbox
+document.querySelector("#reviewButton").addEventListener("click", async () => {
+  const reviewBtn = document.querySelector("#reviewButton");
+  reviewBtn.disabled = true;
+  reviewBtn.textContent = "Classifying with AI...";
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/demo/classify`, { method: "POST" });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || "Classification failed");
+    }
+    const data = await response.json();
+    const provider = data.provider === "openrouter" ? `AI (${data.model})` : "Deterministic Fallback";
+    showToast(`Classified ${data.classified} messages via ${provider}. ${data.skipped} already classified.`);
+    inboxState.offset = 0;
+    await fetchInbox();
+    await updateSidebarFromApi();
+  } catch (e) {
+    showToast(e.message || "Classification failed");
+  } finally {
+    reviewBtn.disabled = false;
+    reviewBtn.textContent = "✦ Review priority mail";
+  }
 });
+
 document.querySelector("#openBrief").addEventListener("click", () => showToast("Open an email to review its classification and labels."));
 document.querySelector("#modeButton").addEventListener("click", () => showToast("Approve mode is on — nothing sends without your check."));
 document.querySelector(".icon-button[aria-label='Search']").addEventListener("click", () => togglePalette(true));
@@ -404,7 +530,12 @@ document.addEventListener("keydown", (event) => {
 (async function init() {
   const isDemo = await checkDemoMode();
   if (isDemo) {
+    // Set sidebar counts to 0 initially (will update from API)
+    document.querySelectorAll(".nav-item b, .nav-item b.muted-count").forEach(el => {
+      el.textContent = "…";
+    });
     await fetchInbox();
+    await updateSidebarFromApi();
   } else if (apiConfig.baseUrl && apiConfig.token) {
     await fetchInbox();
   } else {
@@ -415,7 +546,17 @@ document.addEventListener("keydown", (event) => {
 
 const onboardingDialog = document.querySelector("#onboardingDialog");
 const onboardingForm = document.querySelector("#onboardingForm");
-if (!localStorage.getItem("mailagent.onboardingComplete")) onboardingDialog.showModal();
+
+// Skip onboarding in demo mode — judges should not be blocked
+if (inboxState.isDemoMode || localStorage.getItem("mailagent.onboardingComplete")) {
+  // Don't show dialog
+} else {
+  // In non-demo mode, show onboarding for first-time users
+  if (!localStorage.getItem("mailagent.onboardingComplete")) {
+    onboardingDialog.showModal();
+  }
+}
+
 onboardingForm.addEventListener("submit", () => {
   localStorage.setItem("mailagent.onboardingComplete", "true");
   localStorage.setItem("mailagent.preferences", JSON.stringify({

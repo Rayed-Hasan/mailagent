@@ -450,14 +450,17 @@ async def get_email(
 
     try:
         email = await db.get_email(email_id)
-        account = await db.get_account_for_email(email_id)
-
-        # In demo mode, skip account ownership check
-        if not settings.public_demo_mode:
-            if not email or not account or account.get("user_id") != user_id:
-                raise HTTPException(status_code=404, detail="Resource not found")
-        elif not email:
+        if not email:
             raise HTTPException(status_code=404, detail="Resource not found")
+
+        # In non-demo mode, check account ownership
+        if not settings.public_demo_mode:
+            try:
+                account = await db.get_account_for_email(email_id)
+                if not account or account.get("user_id") != user_id:
+                    raise HTTPException(status_code=404, detail="Resource not found")
+            except Exception:
+                raise HTTPException(status_code=404, detail="Resource not found")
 
         # Add classification
         classification = await db.get_classification(email_id)

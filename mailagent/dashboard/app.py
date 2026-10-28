@@ -148,6 +148,18 @@ async def initialize_database() -> None:
                     )
                     demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
 
+        # If after startup there are still 0 emails in demo account, seed initial demo messages
+        # so judges and visitors immediately have a rich, populated mailbox to test AI classification and drafts
+        try:
+            account_id = get_demo_account_id()
+            existing_emails = await db.get_emails_by_account(account_id, limit=1)
+            if not existing_emails:
+                seeder = DemoSeeder(db)
+                await seeder.seed_demo_data()
+                logger.info("Seeded initial demo mailbox with synthetic sample messages for evaluation")
+        except Exception as seed_err:
+            logger.warning("Could not auto-seed demo mailbox: %s", seed_err)
+
 
 @app.on_event("shutdown")
 async def close_database() -> None:

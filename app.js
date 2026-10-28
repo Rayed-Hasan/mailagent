@@ -14,7 +14,28 @@ const apiConfig = {
     || sessionStorage.getItem("mailagent.dashboardToken") || "",
 };
 
-const inboxState = { accountId: null, offset: 0, total: 0, loading: false, isDemoMode: false, allEmails: [] };
+const inboxState = { 
+  accountId: null, 
+  offset: 0, 
+  total: 0, 
+  loading: false, 
+  isDemoMode: false, 
+  allEmails: [],
+  activeNav: "inbox",
+  tokensUsed: 0
+};
+
+function addTokenUsage(tokens) {
+  inboxState.tokensUsed += (tokens || 0);
+  const tokenEl = document.querySelector("#tokenUsageText");
+  if (tokenEl) {
+    if (inboxState.tokensUsed >= 1000) {
+      tokenEl.textContent = `${(inboxState.tokensUsed / 1000).toFixed(1)}k tokens`;
+    } else {
+      tokenEl.textContent = `${inboxState.tokensUsed} tokens`;
+    }
+  }
+}
 
 function setConnectionStatus(message, connected = false) {
   connectionStatus.replaceChildren();
@@ -301,6 +322,17 @@ function queryParams() {
   if (label) params.set("label", label);
   if (minPriority) params.set("min_priority", minPriority);
   if (reply) params.set("needs_reply", reply);
+
+  // If a sidebar folder or label is active
+  if (inboxState.activeNav) {
+    if (inboxState.activeNav === "read-later") {
+      params.set("label", "Read Later");
+    } else if (inboxState.activeNav === "follow-up") {
+      params.set("needs_reply", "true");
+    } else if (inboxState.activeNav === "newsletters") {
+      params.set("category", "newsletter");
+    }
+  }
   return params;
 }
 
@@ -404,6 +436,7 @@ async function openEmail(emailId) {
           draftContent.textContent = draftData.content;
           draftArea.style.display = "block";
           generateBtn.textContent = "✦ Regenerate Reply Draft";
+          addTokenUsage(draftData.tokens || 350);
           // Refresh sidebar draft count
           await updateSidebarFromApi();
         } catch (e) {
@@ -503,6 +536,9 @@ document.querySelector("#reviewButton").addEventListener("click", async () => {
     const data = await response.json();
     const provider = data.provider === "openrouter" ? `AI (${data.model})` : "Deterministic Fallback";
     showToast(`Classified ${data.classified} messages via ${provider}. ${data.skipped} already classified.`);
+    if (data.classified > 0) {
+      addTokenUsage(data.classified * 280);
+    }
     inboxState.offset = 0;
     await fetchInbox();
     await updateSidebarFromApi();
@@ -516,15 +552,52 @@ document.querySelector("#reviewButton").addEventListener("click", async () => {
 
 document.querySelector("#openBrief").addEventListener("click", () => showToast("Open an email to review its classification and labels."));
 document.querySelector("#modeButton").addEventListener("click", () => showToast("Approve mode is on — nothing sends without your check."));
-document.querySelector(".icon-button[aria-label='Search']").addEventListener("click", () => togglePalette(true));
-document.querySelector(".palette-backdrop").addEventListener("click", () => togglePalette(false));
-document.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-    event.preventDefault();
-    togglePalette(true);
-  }
-  if (event.key === "Escape") togglePalette(false);
+// Sidebar navigation routing
+function handleNavigation(hash) {
+  const cleanHash = (hash || window.location.hash || "#inbox").replace(/^#/, "");
+  inboxState.activeNav = cleanHash;
+
+  // Update active class on sidebar links
+  document.querySelectorAll(".main-nav a.nav-item").forEach((el) => {
+    const href = el.getAttribute("href") || "";
+    el.classList.toggle("active", href === `#${cleanHash}`);
+  });
+
+  // Update breadcrumb and section heading
+  const breadcrumbStrong = document.querySelector(".breadcrumb strong");
+  const sectionTitle = document.querySelector(".section-heading h2");
+  const sectionDesc = document.querySelector(".section-heading p");
+
+  const titles = {
+    "inbox": ["Priority inbox", "Live messages from your connected account"],
+    "drafts": ["Drafts", "AI-assisted draft replies ready for review"],
+    "sent": ["Sent messages", "Messages sent from your mailbox"],
+    "archive": ["Archive", "Archived email threads"],
+    "follow-up": ["Follow up", "Messages requiring your reply or action"],
+    "read-later": ["Read later", "Articles, newsletters, and low-priority reading"],
+    "newsletters": ["Newsletters", "Subscriptions and recurring digests"],
+  };
+
+  const [title, desc] = titles[cleanHash] || ["Priority inbox", "Live messages from your connected account"];
+  if (breadcrumbStrong) breadcrumbStrong.textContent = title;
+  if (sectionTitle) sectionTitle.textContent = title;
+  if (sectionDesc) sectionDesc.textContent = desc;
+
+  // Reset offset and fetch
+  inboxState.offset = 0;
+  fetchInbox();
+}
+
+// Listen for sidebar nav clicks and hash changes
+document.querySelectorAll(".main-nav a.nav-item").forEach((link) => {
+  link.addEventListener("click", (e) => {
+    const href = link.getAttribute("href");
+    if (href && href.startsWith("#")) {
+      handleNavigation(href);
+    }
+  });
 });
+window.addEventListener("hashchange", () => handleNavigation(window.location.hash));
 
 // Initialize: check for demo mode first, then try to load inbox
 (async function init() {

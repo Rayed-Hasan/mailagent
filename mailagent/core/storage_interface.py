@@ -152,7 +152,7 @@ class StorageInterface(ABC):
 
     # Account operations
     @abstractmethod
-    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any]) -> str:
+    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any], account_id: Optional[str] = None) -> str:
         """Save an email account, returns account ID"""
         pass
 

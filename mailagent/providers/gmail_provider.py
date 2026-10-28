@@ -7,6 +7,7 @@ import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import re
+import logging
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -36,6 +37,7 @@ FULL_SCOPES = [
 ]
 
 SCOPES = DEFAULT_SCOPES
+logger = logging.getLogger("mailagent.gmail")
 
 
 class GmailProvider(EmailProviderInterface):
@@ -53,8 +55,8 @@ class GmailProvider(EmailProviderInterface):
         if token_info and ('token' in token_info or 'refresh_token' in token_info):
             try:
                 self.credentials = Credentials.from_authorized_user_info(token_info, self.active_scopes)
-            except Exception as e:
-                print(f"Failed to load credentials from token info: {e}")
+            except Exception as exc:
+                logger.warning("Failed to load stored Gmail credentials (%s)", type(exc).__name__)
 
     async def connect(self) -> bool:
         """Connect to Gmail API, refreshing credentials if expired"""
@@ -70,8 +72,8 @@ class GmailProvider(EmailProviderInterface):
 
             self.service = build('gmail', 'v1', credentials=self.credentials)
             return True
-        except Exception as e:
-            print(f"Gmail connection failed: {e}")
+        except Exception as exc:
+            logger.warning("Gmail connection failed (%s)", type(exc).__name__)
             return False
 
     async def disconnect(self) -> None:
@@ -86,8 +88,8 @@ class GmailProvider(EmailProviderInterface):
         try:
             profile = self.service.users().getProfile(userId='me').execute()
             return profile
-        except Exception as e:
-            print(f"Error fetching Gmail profile: {e}")
+        except Exception as exc:
+            logger.warning("Gmail profile request failed (%s)", type(exc).__name__)
             return None
 
     async def fetch_emails(
@@ -130,12 +132,12 @@ class GmailProvider(EmailProviderInterface):
                     email_message = self._parse_gmail_message(msg)
                     if email_message:
                         messages.append(email_message)
-                except Exception as e:
-                    print(f"Error fetching message {msg_id['id']}: {e}")
+                except Exception as exc:
+                    logger.warning("Gmail message fetch failed (%s)", type(exc).__name__)
                     continue
 
-        except HttpError as e:
-            print(f"Gmail API error: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail message list request failed (%s)", type(exc).__name__)
 
         return messages
 
@@ -157,8 +159,8 @@ class GmailProvider(EmailProviderInterface):
                 if email_message:
                     messages.append(email_message)
 
-        except HttpError as e:
-            print(f"Error fetching thread: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail thread request failed (%s)", type(exc).__name__)
 
         return messages
 
@@ -194,11 +196,11 @@ class GmailProvider(EmailProviderInterface):
                     email_message = self._parse_gmail_message(msg)
                     if email_message:
                         messages.append(email_message)
-                except Exception as e:
+                except Exception:
                     continue
 
-        except HttpError as e:
-            print(f"Error fetching sender history: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail sender history request failed (%s)", type(exc).__name__)
 
         return messages
 
@@ -234,8 +236,8 @@ class GmailProvider(EmailProviderInterface):
 
             return True
 
-        except HttpError as e:
-            print(f"Error applying label: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail label request failed (%s)", type(exc).__name__)
             return False
 
     async def move_to_folder(self, message_id: str, folder: str) -> bool:
@@ -254,8 +256,8 @@ class GmailProvider(EmailProviderInterface):
                 body={'removeLabelIds': ['INBOX']}
             ).execute()
             return True
-        except HttpError as e:
-            print(f"Error archiving: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail archive request failed (%s)", type(exc).__name__)
             return False
 
     async def create_draft(
@@ -287,8 +289,8 @@ class GmailProvider(EmailProviderInterface):
 
             return draft['id']
 
-        except HttpError as e:
-            print(f"Error creating draft: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail draft creation failed (%s)", type(exc).__name__)
             return ""
 
     async def send_reply(self, draft_id: str) -> bool:
@@ -302,8 +304,8 @@ class GmailProvider(EmailProviderInterface):
                 body={'id': draft_id}
             ).execute()
             return True
-        except HttpError as e:
-            print(f"Error sending draft: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail draft send failed (%s)", type(exc).__name__)
             return False
 
     async def delete_draft(self, draft_id: str) -> bool:
@@ -317,8 +319,8 @@ class GmailProvider(EmailProviderInterface):
                 id=draft_id
             ).execute()
             return True
-        except HttpError as e:
-            print(f"Error deleting draft: {e}")
+        except HttpError as exc:
+            logger.warning("Gmail draft deletion failed (%s)", type(exc).__name__)
             return False
 
     def is_no_reply_address(self, email: str) -> bool:
@@ -401,8 +403,8 @@ class GmailProvider(EmailProviderInterface):
                 references=references
             )
 
-        except Exception as e:
-            print(f"Error parsing Gmail message: {e}")
+        except Exception as exc:
+            logger.warning("Gmail message parsing failed (%s)", type(exc).__name__)
             return None
 
     def _extract_gmail_body(self, payload: Dict) -> str:

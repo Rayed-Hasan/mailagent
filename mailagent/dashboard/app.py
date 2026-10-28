@@ -7,10 +7,10 @@ from typing import Dict, List, Optional, Any
 import logging
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("mailagent.dashboard")
 
@@ -118,6 +118,7 @@ async def initialize_database() -> None:
                         provider="gmail",
                         email_address=email_addr,
                         credentials=token_dict,
+                        account_id=get_demo_account_id(),
                     )
 
                 # Sync real messages
@@ -410,11 +411,8 @@ async def get_emails_with_classifications(
                 needs_reply=needs_reply,
                 sort_by=sort_by,
             )
-        except Exception:
-            logger.exception(
-                "Failed to load classified emails for account_id=%s",
-                account_id,
-            )
+        except Exception as exc:
+            logger.error("Failed to load classified emails (%s)", type(exc).__name__)
             raise HTTPException(
                 status_code=500,
                 detail="Unable to load classified emails",
@@ -609,7 +607,7 @@ async def simulate_demo_send(
         raise HTTPException(status_code=403, detail="Demo mode is not enabled")
 
     # In public demo mode with real Gmail, prevent anonymous users from sending arbitrary emails
-    if not settings.demo_allow_public_send:
+    if settings.public_demo_mode:
         raise HTTPException(
             status_code=403,
             detail="Public email sending is disabled to protect the demo mailbox. Judges can review and generate drafts.",
@@ -818,7 +816,7 @@ async def get_demo_status(
             "last_error": demo_mailbox_status.get("last_error"),
             "ai_provider": "openrouter" if settings.openrouter_api_key else "fallback",
             "ai_model": settings.openrouter_model,
-            "can_public_send": settings.demo_allow_public_send,
+            "can_public_send": False,
             "note": "Messages in the public demo are retrieved from the dedicated demo mailbox."
         }
     finally:
@@ -877,7 +875,9 @@ async def reset_demo_data(
     if not settings.public_demo_mode:
         raise HTTPException(status_code=403, detail="Demo mode is not enabled")
 
-    if not settings.demo_reset_endpoint_enabled:
+    # DemoSeeder creates synthetic messages; the public live-mail demo must
+    # never expose those as if they came from the connected Gmail mailbox.
+    if settings.public_demo_mode or not settings.demo_reset_endpoint_enabled:
         raise HTTPException(status_code=403, detail="Demo reset is disabled")
 
     try:
@@ -898,8 +898,15 @@ async def reset_demo_data(
 # Anonymous visitors/judges CANNOT access these endpoints.
 # =========================================================================
 
-# In-memory OAuth state storage with timestamps to prevent CSRF
-_oauth_states: Dict[str, datetime] = {}
+# OAuth state is stored hashed in SQLite so all workers share one-time use.
+
+
+def gmail_oauth_result_redirect(status: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"/auth/gmail/result?status={status}",
+        status_code=303,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
 
 
 @app.get("/api/owner/gmail/auth-url", dependencies=[Depends(require_dashboard_auth)])
@@ -909,6 +916,7 @@ async def get_owner_gmail_auth_url():
     Never accessible to anonymous judges.
     """
     import secrets
+    import hashlib
     from mailagent.providers.gmail_provider import GmailOAuthFlow, DEFAULT_SCOPES
 
     client_id = settings.demo_gmail_client_id or settings.google_client_id
@@ -920,16 +928,19 @@ async def get_owner_gmail_auth_url():
             status_code=400,
             detail="Google Client ID and Secret must be configured in environment (GOOGLE_CLIENT_ID or DEMO_GMAIL_CLIENT_ID)",
         )
+    if settings.public_demo_mode and settings.environment == "production" and not redirect_uri.startswith("https://"):
+        raise HTTPException(status_code=503, detail="Gmail OAuth redirect URI must use the configured HTTPS Render URL")
 
     # Generate cryptographic state token
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = datetime.now(timezone.utc)
-
-    # Purge old states (> 15 min)
-    now = datetime.now(timezone.utc)
-    for k in list(_oauth_states.keys()):
-        if (now - _oauth_states[k]).total_seconds() > 900:
-            _oauth_states.pop(k, None)
+    try:
+        await db.create_oauth_state(
+            hashlib.sha256(state.encode("utf-8")).hexdigest(),
+            datetime.now(timezone.utc) + timedelta(minutes=15),
+        )
+    except Exception as exc:
+        logger.error("Unable to persist Gmail OAuth state (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Gmail authorization is temporarily unavailable") from None
 
     try:
         auth_url = GmailOAuthFlow.get_authorization_url(
@@ -939,12 +950,12 @@ async def get_owner_gmail_auth_url():
             scopes=DEFAULT_SCOPES,
             state=state,
         )
-    except Exception:
-        logger.exception(
-            "Failed to generate Gmail OAuth authorization URL for redirect_uri=%s",
-            redirect_uri,
-        )
-        _oauth_states.pop(state, None)
+    except Exception as exc:
+        logger.error("Failed to generate Gmail OAuth authorization URL (%s)", type(exc).__name__)
+        try:
+            await db.consume_oauth_state(hashlib.sha256(state.encode("utf-8")).hexdigest())
+        except Exception:
+            pass
         raise HTTPException(
             status_code=502,
             detail="Unable to initialize Gmail OAuth",
@@ -954,13 +965,7 @@ async def get_owner_gmail_auth_url():
         "auth_url": auth_url,
         "redirect_uri": redirect_uri,
         "scopes": DEFAULT_SCOPES,
-        "state": state,
     }
-
-
-class OwnerCallbackRequest(BaseModel):
-    code: str
-    state: Optional[str] = None
 
 
 @app.get("/auth/gmail/callback")
@@ -969,101 +974,137 @@ async def receive_gmail_callback(
     state: Optional[str] = None,
     error: Optional[str] = None,
 ):
-    """
-    Receive Google's browser redirect and return the code for the authenticated
-    owner API to exchange. The state remains stored until that API call.
-    """
-    if error:
-        raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
-    if not code:
-        raise HTTPException(status_code=400, detail="Missing OAuth authorization code")
-    if not state or state not in _oauth_states:
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-    return {
-        "message": "Authorization received. Submit this code to POST /api/owner/gmail/callback with the owner token.",
-        "code": code,
-        "state": state,
-    }
-
-
-@app.post("/api/owner/gmail/callback", dependencies=[Depends(require_dashboard_auth)])
-async def handle_owner_gmail_callback(payload: OwnerCallbackRequest):
-    """
-    Owner-only endpoint: exchange authorization code for refresh token, save credentials,
-    and initialize real Gmail synchronization.
-    Never accessible to anonymous judges.
-    """
-    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
+    """Complete the server-side OAuth flow without exposing the code to the page."""
+    import hashlib
     from mailagent.providers.gmail_provider import GmailOAuthFlow, GmailProvider, DEFAULT_SCOPES
     from mailagent.demo.demo_data import get_demo_account_id, get_demo_user_id
     from mailagent.mail.sync_service import GmailSyncService
 
-    # Validate state if passed
-    if payload.state:
-        if payload.state not in _oauth_states:
-            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-        _oauth_states.pop(payload.state, None)
+    if not settings.public_demo_mode:
+        return gmail_oauth_result_redirect("failed")
+    if not state:
+        logger.warning("Rejected Gmail OAuth callback without state")
+        return gmail_oauth_result_redirect("failed")
+    try:
+        state_valid = await db.consume_oauth_state(
+            hashlib.sha256(state.encode("utf-8")).hexdigest()
+        )
+    except Exception as exc:
+        logger.error("Unable to validate Gmail OAuth state (%s)", type(exc).__name__)
+        return gmail_oauth_result_redirect("failed")
+    if not state_valid:
+        logger.warning("Rejected invalid, expired, or replayed Gmail OAuth state")
+        return gmail_oauth_result_redirect("failed")
+    if error:
+        known_errors = {"access_denied", "redirect_uri_mismatch", "invalid_request", "server_error"}
+        safe_error = error if error in known_errors else "authorization_error"
+        logger.warning("Google Gmail OAuth authorization failed (%s)", safe_error)
+        return gmail_oauth_result_redirect("failed")
+    if not code:
+        return gmail_oauth_result_redirect("failed")
 
+    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
     client_id = settings.demo_gmail_client_id or settings.google_client_id
     client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
     redirect_uri = settings.demo_gmail_redirect_uri or settings.google_redirect_uri
-
+    if not client_id or not client_secret or not redirect_uri:
+        logger.error("Gmail OAuth configuration is incomplete")
+        return gmail_oauth_result_redirect("failed")
+    if settings.environment == "production" and not redirect_uri.startswith("https://"):
+        logger.error("Gmail OAuth redirect URI is not HTTPS in production")
+        return gmail_oauth_result_redirect("failed")
     try:
         tokens = GmailOAuthFlow.exchange_code_for_token(
-            code=payload.code,
+            code=code,
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             scopes=DEFAULT_SCOPES,
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to exchange OAuth code: {str(e)}")
+    except Exception as exc:
+        # Do not log exception text: OAuth libraries may include request data.
+        diagnostic = str(exc).casefold()
+        if "invalid_grant" in diagnostic:
+            category = "invalid_grant"
+        elif "redirect_uri" in diagnostic:
+            category = "redirect_uri_mismatch"
+        elif "invalid_client" in diagnostic:
+            category = "invalid_client"
+        else:
+            category = type(exc).__name__
+        logger.warning("Google Gmail OAuth token exchange failed (%s)", category)
+        return gmail_oauth_result_redirect("failed")
 
+    if not isinstance(tokens, dict):
+        logger.error("Google OAuth token response was malformed")
+        return gmail_oauth_result_redirect("failed")
     refresh_token = tokens.get("refresh_token")
-    if not refresh_token:
-        # Warning: if user already authorized without prompt=consent, refresh_token might not be returned
-        logger.warning("No refresh_token returned by Google OAuth. Re-run with prompt=consent.")
+    if not isinstance(refresh_token, str) or not refresh_token.strip() or not isinstance(tokens.get("token"), str) or not tokens["token"].strip():
+        logger.error("Google OAuth response omitted required durable credentials")
+        return gmail_oauth_result_redirect("failed")
 
     # Initialize provider and get actual email address
     provider = GmailProvider(tokens, scopes=DEFAULT_SCOPES)
-    if not await provider.connect():
-        raise HTTPException(status_code=400, detail="Failed to connect to Gmail with returned tokens")
-
-    profile = await provider.get_user_profile()
-    email_address = profile.get("emailAddress", "dedicated-demo@gmail.com") if profile else "dedicated-demo@gmail.com"
+    try:
+        if not await provider.connect():
+            logger.error("Gmail API connection failed after OAuth exchange")
+            return gmail_oauth_result_redirect("failed")
+        profile = await provider.get_user_profile()
+    except Exception as exc:
+        logger.error("Gmail API validation failed after OAuth exchange (%s)", type(exc).__name__)
+        return gmail_oauth_result_redirect("failed")
+    email_address = profile.get("emailAddress") if profile else None
+    if not email_address:
+        logger.error("Gmail profile response omitted email address")
+        return gmail_oauth_result_redirect("failed")
+    if settings.demo_gmail_email and email_address.casefold() != settings.demo_gmail_email.casefold():
+        logger.error("OAuth account did not match configured demo Gmail account")
+        return gmail_oauth_result_redirect("failed")
 
     # Save to database
     account_id = get_demo_account_id()
     user_id = get_demo_user_id()
 
-    await db.save_account(
-        user_id=user_id,
-        provider="gmail",
-        email_address=email_address,
-        credentials=tokens,
-    )
+    try:
+        await db.save_account(
+            user_id=user_id,
+            provider="gmail",
+            email_address=email_address,
+            credentials=tokens,
+            account_id=account_id,
+        )
+        demo_sync_service = GmailSyncService(db)
+        sync_stats = await demo_sync_service.sync_mailbox(
+            account_id=account_id,
+            provider=provider,
+            limit=50,
+        )
+    except Exception as exc:
+        logger.error("Gmail credentials or initial sync could not be persisted (%s)", type(exc).__name__)
+        return gmail_oauth_result_redirect("failed")
 
     demo_gmail_provider = provider
     demo_mailbox_status["connected"] = True
     demo_mailbox_status["email_address"] = email_address
-
-    # Initial sync
-    demo_sync_service = GmailSyncService(db)
-    sync_stats = await demo_sync_service.sync_mailbox(
-        account_id=account_id,
-        provider=provider,
-        limit=50,
-    )
     demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
+    demo_mailbox_status["message_count"] = sync_stats.get("new", 0)
+    if sync_stats.get("error_message") or sync_stats.get("errors", 0):
+        logger.warning("Gmail connected, but initial mailbox synchronization reported errors")
+        return gmail_oauth_result_redirect("failed")
+    return gmail_oauth_result_redirect("success")
 
-    return {
-        "status": "connected",
-        "email_address": email_address,
-        "account_id": account_id,
-        "sync_stats": sync_stats,
-        "has_refresh_token": bool(refresh_token),
-        # Do NOT expose the secret tokens in the response!
-    }
+
+@app.get("/auth/gmail/result")
+async def gmail_oauth_result(status: str = Query(default="failed", pattern="^(success|failed)$")):
+    """Show a fixed result page after the code-bearing callback URL is cleared."""
+    if status == "success":
+        content = "<main><h1>Gmail connected</h1><p>The mailbox was authorized and its initial sync completed. You may close this page.</p></main>"
+    else:
+        content = "<main><h1>Gmail connection failed</h1><p>Restart the owner authorization flow. The server logs contain a safe diagnostic category.</p></main>"
+    return HTMLResponse(
+        f"<!doctype html><html lang='en'><meta charset='utf-8'><title>Mail Agent Gmail</title><body>{content}</body></html>",
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ Database layer with storage abstraction
 """
 
 import json
-import hashlib
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -39,12 +38,9 @@ class Database:
             # Use demo database if in demo mode or forced
             if force_demo_mode or settings.public_demo_mode:
                 db_path = getattr(settings, 'demo_sqlite_db_path', 'mailagent-demo.db')
-                demo_key = hashlib.sha256(
-                    b"mailagent-public-demo-only"
-                ).digest()
                 self.storage = SQLiteStorage(
                     db_path,
-                    secret_store=SecretStore(key=demo_key),
+                    secret_store=SecretStore(),
                 )
             else:
                 db_path = getattr(settings, 'sqlite_db_path', 'mailagent.db')
@@ -433,10 +429,10 @@ class Database:
         return len(result.data) > 0
 
     # Account operations
-    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any]) -> str:
+    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any], account_id: Optional[str] = None) -> str:
         """Save an email account with versioned authenticated encryption."""
         if self.storage:
-            return await self.storage.save_account(user_id, provider, email_address, credentials)
+            return await self.storage.save_account(user_id, provider, email_address, credentials, account_id)
 
         secret_store = SecretStore()
         associated_data = f"email-account:{user_id}:{provider}:{email_address}"
@@ -453,9 +449,21 @@ class Database:
             "email_address": email_address,
             "credentials": encrypted_credentials
         }
+        if account_id:
+            data["id"] = account_id
 
         result = self.client.table("email_accounts").insert(data).execute()
         return result.data[0]["id"]
+
+    async def create_oauth_state(self, state: str, expires_at: datetime) -> None:
+        if not self.storage:
+            raise RuntimeError("OAuth state storage requires SQLite")
+        await self.storage.create_oauth_state(state, expires_at)
+
+    async def consume_oauth_state(self, state: str) -> bool:
+        if not self.storage:
+            raise RuntimeError("OAuth state storage requires SQLite")
+        return await self.storage.consume_oauth_state(state)
 
     async def get_account(self, account_id: str) -> Optional[Dict[str, Any]]:
         """Get an account by ID"""

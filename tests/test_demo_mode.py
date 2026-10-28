@@ -79,14 +79,94 @@ class TestDemoModeSecurity:
         with patch.object(settings, "demo_gmail_client_id", "client-id"), \
              patch.object(settings, "demo_gmail_client_secret", "client-secret"), \
              patch.object(settings, "demo_gmail_redirect_uri", "https://demo.invalid/callback"), \
+             patch.object(dashboard.db, "create_oauth_state", AsyncMock()), \
              patch(
                  "mailagent.providers.gmail_provider.GmailOAuthFlow.get_authorization_url",
-                 return_value="https://accounts.google.com/o/oauth2/auth",
+                 side_effect=lambda **kwargs: f"https://accounts.google.com/o/oauth2/auth?state={kwargs['state']}",
              ):
             result = await dashboard.get_owner_gmail_auth_url()
             assert result["auth_url"].startswith("https://accounts.google.com/")
             assert result["redirect_uri"] == "https://demo.invalid/callback"
-            assert result["state"]
+            assert "state=" in result["auth_url"]
+            assert "state" not in result
+
+    @pytest.mark.asyncio
+    async def test_browser_callback_rejects_missing_state(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(dashboard.db, "consume_oauth_state", AsyncMock(return_value=False)) as consume:
+            response = await dashboard.receive_gmail_callback(code="code", state=None)
+        assert response.status_code == 303
+        assert "status=failed" in response.headers["location"]
+        consume.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_browser_callback_exchanges_saves_and_syncs_without_exposing_code(self):
+        from datetime import datetime, timezone
+        tokens = {
+            "token": "access-secret", "refresh_token": "refresh-secret",
+            "client_id": "client", "client_secret": "client-secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        mock_provider = MagicMock()
+        mock_provider.connect = AsyncMock(return_value=True)
+        mock_provider.get_user_profile = AsyncMock(return_value={"emailAddress": "demo@gmail.com"})
+        mock_sync = MagicMock()
+        mock_sync.sync_mailbox = AsyncMock(return_value={"new": 2, "synced_at": datetime.now(timezone.utc).isoformat()})
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(settings, "demo_gmail_client_id", "client"), \
+             patch.object(settings, "demo_gmail_client_secret", "secret"), \
+             patch.object(settings, "demo_gmail_redirect_uri", "https://demo.invalid/callback"), \
+             patch.object(dashboard.db, "consume_oauth_state", AsyncMock(return_value=True)), \
+             patch.object(dashboard.db, "save_account", AsyncMock()) as save_account, \
+             patch("mailagent.providers.gmail_provider.GmailOAuthFlow.exchange_code_for_token", return_value=tokens) as exchange, \
+             patch("mailagent.providers.gmail_provider.GmailProvider", return_value=mock_provider), \
+             patch("mailagent.mail.sync_service.GmailSyncService", return_value=mock_sync):
+            response = await dashboard.receive_gmail_callback(code="one-time-code", state="opaque-state")
+        assert response.status_code == 303
+        assert "status=success" in response.headers["location"]
+        assert "one-time-code" not in response.headers["location"]
+        assert "access-secret" not in response.headers["location"]
+        assert "refresh-secret" not in response.headers["location"]
+        assert exchange.call_args.kwargs["redirect_uri"] == "https://demo.invalid/callback"
+        assert save_account.call_args.kwargs["account_id"] == dashboard.get_demo_account_id()
+        mock_sync.sync_mailbox.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_browser_callback_rejects_replay(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(dashboard.db, "consume_oauth_state", AsyncMock(return_value=False)) as consume, \
+             patch("mailagent.providers.gmail_provider.GmailOAuthFlow.exchange_code_for_token") as exchange:
+            response = await dashboard.receive_gmail_callback(code="code", state="replayed")
+        assert response.status_code == 303
+        assert "status=failed" in response.headers["location"]
+        consume.assert_awaited_once()
+        exchange.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_browser_callback_sanitizes_google_exchange_failure(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(settings, "demo_gmail_client_id", "client"), \
+             patch.object(settings, "demo_gmail_client_secret", "secret"), \
+             patch.object(settings, "demo_gmail_redirect_uri", "https://demo.invalid/callback"), \
+             patch.object(dashboard.db, "consume_oauth_state", AsyncMock(return_value=True)), \
+             patch("mailagent.providers.gmail_provider.GmailOAuthFlow.exchange_code_for_token", side_effect=RuntimeError("invalid_grant one-time-code")):
+            response = await dashboard.receive_gmail_callback(code="one-time-code", state="state")
+        assert response.status_code == 303
+        assert "one-time-code" not in response.headers["location"]
+        assert "invalid_grant" not in response.headers["location"]
+
+    @pytest.mark.asyncio
+    async def test_browser_callback_rejects_missing_refresh_token(self):
+        with patch.object(settings, "public_demo_mode", True), \
+             patch.object(settings, "demo_gmail_client_id", "client"), \
+             patch.object(settings, "demo_gmail_client_secret", "secret"), \
+             patch.object(settings, "demo_gmail_redirect_uri", "https://demo.invalid/callback"), \
+             patch.object(dashboard.db, "consume_oauth_state", AsyncMock(return_value=True)), \
+             patch("mailagent.providers.gmail_provider.GmailOAuthFlow.exchange_code_for_token", return_value={"token": "access"}), \
+             patch("mailagent.providers.gmail_provider.GmailProvider") as provider:
+            response = await dashboard.receive_gmail_callback(code="code", state="state")
+        assert response.status_code == 303
+        provider.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_classified_emails_returns_demo_data(self):

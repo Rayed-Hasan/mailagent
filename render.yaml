@@ -4,7 +4,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT --no-access-log
     healthCheckPath: /health
     envVars:
       - key: ENVIRONMENT
@@ -17,6 +17,8 @@ services:
         value: local
       - key: DEMO_SQLITE_DB_PATH
         value: /tmp/mailagent-public-demo.db
+      - key: MAILAGENT_ENCRYPTION_KEY
+        sync: false
       - key: DASHBOARD_ALLOWED_ORIGINS
         value: "*"
       - key: OPENROUTER_MODEL
@@ -26,7 +28,7 @@ services:
       - key: DEMO_MAX_CONCURRENT_REQUESTS
         value: "5"
       - key: DEMO_RESET_ENDPOINT_ENABLED
-        value: "true"
+        value: "false"
       # Real Gmail Integration (Set these in Render dashboard or blueprint)
       - key: DEMO_GMAIL_CLIENT_ID
         sync: false
@@ -41,3 +43,5 @@ services:
       # Required with DASHBOARD_API_TOKEN for owner-only OAuth endpoints.
       - key: DASHBOARD_USER_ID
         value: demo-owner
+      - key: DASHBOARD_API_TOKEN
+        sync: false

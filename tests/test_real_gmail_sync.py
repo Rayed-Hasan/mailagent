@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from pydantic import BaseModel
 
@@ -61,6 +61,37 @@ class TestGmailOAuthSecurityAndFlow:
                 assert tokens["token"] == "access_token_123"
                 assert tokens["refresh_token"] == "refresh_token_456"
                 mock_flow.fetch_token.assert_called_once_with(code="auth_code_xyz")
+
+    @pytest.mark.asyncio
+    async def test_sqlite_oauth_state_is_expiring_one_time_and_shared_after_restart(self, clean_sqlite_storage, tmp_path):
+        import hashlib
+        state_hash = hashlib.sha256(b"opaque-state").hexdigest()
+        await clean_sqlite_storage.initialize()
+        await clean_sqlite_storage.create_oauth_state(state_hash, datetime.now(timezone.utc) + timedelta(minutes=15))
+        restarted = SQLiteStorage(str(tmp_path / "test_gmail_sync.db"), secret_store=SecretStore(key=b"0" * 32))
+        assert await restarted.consume_oauth_state(state_hash) is True
+        assert await clean_sqlite_storage.consume_oauth_state(state_hash) is False
+        expired_hash = hashlib.sha256(b"expired-state").hexdigest()
+        await clean_sqlite_storage.create_oauth_state(expired_hash, datetime.now(timezone.utc) - timedelta(seconds=1))
+        assert await restarted.consume_oauth_state(expired_hash) is False
+
+    @pytest.mark.asyncio
+    async def test_account_credentials_are_encrypted_and_readable_after_restart(self, clean_sqlite_storage, tmp_path):
+        import sqlite3
+        await clean_sqlite_storage.initialize()
+        account_id = await clean_sqlite_storage.save_account(
+            user_id="demo-user", provider="gmail", email_address="demo@gmail.com",
+            credentials={"token": "access", "refresh_token": "refresh-private"},
+            account_id="stable-demo-account",
+        )
+        assert account_id == "stable-demo-account"
+        raw_db = sqlite3.connect(clean_sqlite_storage.db_path)
+        stored = raw_db.execute("SELECT credentials FROM email_accounts WHERE id=?", (account_id,)).fetchone()[0]
+        raw_db.close()
+        assert "refresh-private" not in stored
+        restarted = SQLiteStorage(clean_sqlite_storage.db_path, secret_store=SecretStore(key=b"0" * 32))
+        restored = await restarted.get_account(account_id)
+        assert restored["credentials"]["refresh_token"] == "refresh-private"
 
     @pytest.mark.asyncio
     async def test_gmail_provider_token_refresh(self):

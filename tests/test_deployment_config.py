@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -39,10 +41,59 @@ def test_public_demo_production_configuration_needs_no_enterprise_services():
         public_demo_mode=True,
         storage_backend="sqlite",
         task_queue_backend="local",
+        mailagent_encryption_key=base64.urlsafe_b64encode(b"t" * 32).decode().rstrip("="),
+        dashboard_api_token="synthetic-owner-token",
+        dashboard_user_id="demo-owner",
+        demo_gmail_client_id="synthetic-client-id",
+        demo_gmail_client_secret="synthetic-client-secret",
+        demo_gmail_redirect_uri="https://demo.invalid/auth/gmail/callback",
+        demo_gmail_email="demo@example.invalid",
     )
 
     assert configured.public_demo_mode is True
-    assert configured.dashboard_api_token == ""
+    assert configured.dashboard_api_token == "synthetic-owner-token"
+
+
+def test_public_demo_requires_owner_authentication():
+    with pytest.raises(ValidationError, match="DASHBOARD_API_TOKEN"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            public_demo_mode=True,
+            storage_backend="sqlite",
+            task_queue_backend="local",
+            mailagent_encryption_key=base64.urlsafe_b64encode(b"t" * 32).decode().rstrip("="),
+            dashboard_user_id="demo-owner",
+            demo_gmail_client_id="synthetic-client-id",
+            demo_gmail_client_secret="synthetic-client-secret",
+            demo_gmail_redirect_uri="https://demo.invalid/auth/gmail/callback",
+            demo_gmail_email="demo@example.invalid",
+        )
+
+
+def test_public_demo_production_requires_private_encryption_key():
+    with pytest.raises(ValidationError, match="MAILAGENT_ENCRYPTION_KEY"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            public_demo_mode=True,
+            storage_backend="sqlite",
+            task_queue_backend="local",
+            mailagent_encryption_key="",
+        )
+
+
+@pytest.mark.parametrize("key", ["short", "A" * 44, "!" * 43])
+def test_public_demo_production_rejects_malformed_encryption_key(key):
+    with pytest.raises(ValidationError, match="MAILAGENT_ENCRYPTION_KEY"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            public_demo_mode=True,
+            storage_backend="sqlite",
+            task_queue_backend="local",
+            mailagent_encryption_key=key,
+        )
 
 
 def test_public_demo_rejects_enterprise_backends():

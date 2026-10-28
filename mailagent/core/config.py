@@ -5,6 +5,7 @@ Application configuration using Pydantic Settings
 from pydantic import ConfigDict, model_validator
 from pydantic_settings import BaseSettings
 from typing import Literal
+from mailagent.core.secret_store import decode_encryption_key
 
 
 class Settings(BaseSettings):
@@ -72,7 +73,7 @@ class Settings(BaseSettings):
     public_demo_mode: bool = False
     demo_rate_limit_per_minute: int = 30
     demo_max_concurrent_requests: int = 5
-    demo_reset_endpoint_enabled: bool = True
+    demo_reset_endpoint_enabled: bool = False
     demo_gmail_refresh_token: str = ""
     demo_gmail_client_id: str = ""
     demo_gmail_client_secret: str = ""
@@ -93,6 +94,28 @@ class Settings(BaseSettings):
             if self.task_queue_backend != "local":
                 raise ValueError(
                     "Public demo mode requires TASK_QUEUE_BACKEND=local"
+                )
+            try:
+                decode_encryption_key(self.mailagent_encryption_key)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            required_demo_values = (
+                (self.dashboard_api_token, "DASHBOARD_API_TOKEN"),
+                (self.dashboard_user_id, "DASHBOARD_USER_ID"),
+                (self.demo_gmail_client_id, "DEMO_GMAIL_CLIENT_ID"),
+                (self.demo_gmail_client_secret, "DEMO_GMAIL_CLIENT_SECRET"),
+                (self.demo_gmail_email, "DEMO_GMAIL_EMAIL"),
+            )
+            missing = [name for value, name in required_demo_values if not value.strip()]
+            redirect_uri = self.demo_gmail_redirect_uri.strip()
+            if not redirect_uri:
+                missing.append("DEMO_GMAIL_REDIRECT_URI")
+            elif not redirect_uri.startswith("https://"):
+                raise ValueError("DEMO_GMAIL_REDIRECT_URI must use HTTPS in production")
+            if missing:
+                raise ValueError(
+                    "Public demo configuration is incomplete; refusing to start: "
+                    + ", ".join(missing)
                 )
             return self
 

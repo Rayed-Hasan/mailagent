@@ -6,11 +6,13 @@ services:
     name: mailagent-demo
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port $PORT --no-access-log
     envVars:
       # Demo Mode Configuration
       - key: PUBLIC_DEMO_MODE
         value: "true"
+      - key: ENVIRONMENT
+        value: production
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
@@ -20,7 +22,7 @@ services:
       - key: DEMO_MAX_CONCURRENT_REQUESTS
         value: 5
       - key: DEMO_RESET_ENDPOINT_ENABLED
-        value: "true"
+        value: "false"
       - key: DEMO_SQLITE_DB_PATH
         value: /tmp/mailagent-demo.db
 
@@ -57,9 +59,23 @@ services:
         value: 10000
       - key: DASHBOARD_ALLOWED_ORIGINS
         value: "*"
+      - key: DASHBOARD_USER_ID
+        value: demo-owner
+      - key: DASHBOARD_API_TOKEN
+        sync: false
 
-      # No encryption key needed for demo (no real credentials)
       - key: MAILAGENT_ENCRYPTION_KEY
-        value: ""
+        sync: false
+
+      - key: DEMO_GMAIL_CLIENT_ID
+        sync: false
+      - key: DEMO_GMAIL_CLIENT_SECRET
+        sync: false
+      - key: DEMO_GMAIL_REDIRECT_URI
+        value: https://mailagent-public-demo.onrender.com/auth/gmail/callback
+      - key: DEMO_GMAIL_EMAIL
+        sync: false
+      - key: DEMO_GMAIL_REFRESH_TOKEN
+        sync: false
 
       # No Supabase, Redis, or other external services needed for demo

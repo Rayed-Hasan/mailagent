@@ -35,7 +35,7 @@ def make_32_byte_key() -> bytes:
 
 
 def b64url(key_bytes: bytes) -> str:
-    return base64.urlsafe_b64encode(key_bytes).decode("ascii")
+    return base64.urlsafe_b64encode(key_bytes).decode("ascii").rstrip("=")
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,29 @@ def test_secret_store_aad_binding():
     ct = store.encrypt("api-key-value", associated_data="user-a:claude")
     with pytest.raises(ValueError):
         store.decrypt(ct, associated_data="user-b:claude")
+
+
+def test_secret_store_environment_key_requires_unpadded_32_byte_base64url(monkeypatch):
+    from mailagent.core.secret_store import SecretStore
+
+    encoded = b64url(os.urandom(32))
+    monkeypatch.setenv("MAILAGENT_ENCRYPTION_KEY", encoded)
+    store = SecretStore()
+    assert store.decrypt(store.encrypt("credential")) == "credential"
+
+    monkeypatch.setenv("MAILAGENT_ENCRYPTION_KEY", encoded + "=")
+    with pytest.raises(ValueError, match="43-character unpadded base64url"):
+        SecretStore()
+
+
+def test_secret_store_malformed_environment_key_error_does_not_echo_value(monkeypatch):
+    from mailagent.core.secret_store import SecretStore
+
+    invalid_value = "private-invalid-key-value"
+    monkeypatch.setenv("MAILAGENT_ENCRYPTION_KEY", invalid_value)
+    with pytest.raises(ValueError) as exc:
+        SecretStore()
+    assert invalid_value not in str(exc.value)
 
 
 def test_secret_store_redact_short():

@@ -190,6 +190,13 @@ class SQLiteStorage(StorageInterface):
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state_hash TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL
+            )
+        """)
+
         # Email labels table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS email_labels (
@@ -648,10 +655,10 @@ class SQLiteStorage(StorageInterface):
         return True
 
     # Account operations
-    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any]) -> str:
+    async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any], account_id: Optional[str] = None) -> str:
         """Save an email account with encrypted credentials"""
         import uuid
-        account_id = str(uuid.uuid4())
+        account_id = account_id or str(uuid.uuid4())
 
         # Encrypt credentials
         associated_data = f"email-account:{user_id}:{provider}:{email_address}"
@@ -668,6 +675,12 @@ class SQLiteStorage(StorageInterface):
             await db.execute("""
                 INSERT INTO email_accounts (id, user_id, provider, email_address, credentials)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    provider=excluded.provider,
+                    email_address=excluded.email_address,
+                    credentials=excluded.credentials,
+                    is_active=1
             """, (
                 account_id, user_id, provider, email_address,
                 json.dumps(encrypted_credentials)
@@ -675,6 +688,26 @@ class SQLiteStorage(StorageInterface):
             await db.commit()
 
         return account_id
+
+    async def create_oauth_state(self, state_hash: str, expires_at: datetime) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (datetime.now(timezone.utc).isoformat(),))
+            await db.execute(
+                "INSERT INTO oauth_states (state_hash, expires_at) VALUES (?, ?)",
+                (state_hash, expires_at.isoformat()),
+            )
+            await db.commit()
+
+    async def consume_oauth_state(self, state_hash: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            now = datetime.now(timezone.utc).isoformat()
+            cursor = await db.execute(
+                "DELETE FROM oauth_states WHERE state_hash = ? AND expires_at > ?",
+                (state_hash, now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def get_account(self, account_id: str) -> Optional[Dict[str, Any]]:
         """Get an account by ID"""

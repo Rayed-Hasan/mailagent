@@ -66,8 +66,8 @@ class GmailSyncService:
             )
             stats["fetched"] = len(messages)
         except Exception as e:
-            logger.error(f"Error fetching emails from Gmail: {e}")
-            stats["error_message"] = str(e)
+            logger.error("Gmail fetch failed (%s)", type(e).__name__)
+            stats["error_message"] = "Unable to fetch messages from Gmail"
             return stats
 
         # 2. Process each real message
@@ -97,7 +97,7 @@ class GmailSyncService:
                     await self.db.save_email_labels(email_id, labels, source="system")
 
             except Exception as e:
-                logger.error(f"Error processing real email {email.message_id}: {e}")
+                logger.error("Gmail message processing failed (%s)", type(e).__name__)
                 stats["errors"] += 1
 
         return stats

@@ -209,6 +209,45 @@ class TestRealMessageNormalizationAndDeduplication:
         await clean_sqlite_storage.close()
 
 
+    @pytest.mark.asyncio
+    async def test_sync_does_not_persist_deterministic_fallback_classification(self):
+        from mailagent.core.types import ClassificationResult, EmailAction
+
+        db = MagicMock()
+        db.get_email_by_message_id = AsyncMock(return_value=None)
+        db.save_email = AsyncMock(return_value="email-id")
+        db.save_classification = AsyncMock()
+        db.save_email_labels = AsyncMock()
+        service = GmailSyncService(db)
+        service.classifier.classify = AsyncMock(return_value=ClassificationResult(
+            email_id="",
+            category=EmailCategory.FYI,
+            priority_score=50,
+            action=EmailAction.ARCHIVE,
+            confidence=0.85,
+            reason="This is a deterministic fallback classification.",
+        ))
+        message = EmailMessage(
+            message_id="fallback-message",
+            thread_id="fallback-thread",
+            sender="Sender <sender@example.com>",
+            sender_email="sender@example.com",
+            subject="A test message",
+            body="A message for fallback classification coverage.",
+            received_at=datetime.now(timezone.utc),
+            raw_headers={},
+        )
+        provider = MagicMock()
+        provider.fetch_emails = AsyncMock(return_value=[message])
+
+        stats = await service.sync_mailbox("account-id", provider)
+
+        assert stats["new"] == 1
+        assert stats["unclassified"] == 1
+        db.save_classification.assert_not_awaited()
+        db.save_email_labels.assert_not_awaited()
+
+
 class TestSecurityBoundariesAndJudgeAccess:
     """Verify owner route protection, unauthenticated judge access, and sending denial."""
 
@@ -258,8 +297,8 @@ class TestSecurityBoundariesAndJudgeAccess:
             assert "sending is disabled" in exc.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_openrouter_draft_generation_with_labeled_fallback(self):
-        """Draft generation must provide provider and fallback label."""
+    async def test_demo_draft_generation_rejects_fallback_without_saving(self):
+        """A deterministic fallback must not be presented as an AI draft."""
         with patch.object(settings, "public_demo_mode", True):
             mock_email = {"id": "email-1", "subject": "Test Question", "body": "Can we meet tomorrow?"}
             mock_account = {"id": dashboard.get_demo_account_id()}
@@ -272,12 +311,12 @@ class TestSecurityBoundariesAndJudgeAccess:
                  patch.object(dashboard.demo_rate_limiter, "check_rate_limit", AsyncMock(return_value=(True, None))), \
                  patch.object(dashboard.demo_rate_limiter, "release_request", AsyncMock()):
 
-                res = await dashboard.generate_demo_draft(
-                    http_request=MagicMock(),
-                    draft_request=dashboard.DemoDraftRequest(email_id="email-1"),
-                    user_id="demo-user-judge",
-                )
-                assert res["draft_id"] == "draft-saved-1"
-                assert "content" in res
-                assert "fallback" in res
-                assert "provider" in res
+                with pytest.raises(HTTPException) as exc:
+                    await dashboard.generate_demo_draft(
+                        http_request=MagicMock(),
+                        draft_request=dashboard.DemoDraftRequest(email_id="email-1"),
+                        user_id="demo-user-judge",
+                    )
+                assert exc.value.status_code == 503
+                assert "provider unavailable" in exc.value.detail
+                dashboard.db.save_draft.assert_not_awaited()

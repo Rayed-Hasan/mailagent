@@ -604,7 +604,9 @@ async def generate_demo_draft(
         # Send only the minimum email content necessary for inference
         prompt_content = (
             "You are a professional email assistant. Draft a concise, helpful, and professional reply "
-            "to the following message. Be polite and address any direct questions.\n\n"
+            "to the following message. Be polite and address any direct questions. "
+            "If the sender asks for a choice between options, either pick one based on context or ask for clarification. "
+            "Do not use generic acknowledgments like 'I'll look into it' - be specific and responsive.\n\n"
             f"Subject: {email.get('subject', '')}\n\n"
             f"{email.get('body', '')[:1500]}"
         )
@@ -619,6 +621,23 @@ async def generate_demo_draft(
             role="drafting",
             max_tokens=300,
         )
+
+        # Check if fallback was used - reject the draft if so
+        if used_fallback or response.raw.get("is_fallback", False):
+            logger.error("Draft generation used deterministic fallback; rejecting draft")
+            raise HTTPException(
+                status_code=503,
+                detail="Draft generation failed: AI provider unavailable (rate limited or not configured). Drafts are only saved when AI generation succeeds."
+            )
+
+        # Validate the draft is not empty
+        draft_content = response.text.strip()
+        if not draft_content:
+            raise HTTPException(
+                status_code=503,
+                detail="Draft generation failed: provider returned empty response"
+            )
+
         # Update existing pending draft if one exists to avoid duplicates
         existing_drafts = await db.get_pending_drafts(email.get("account_id") or demo_acc_id)
         existing_for_email = [d for d in existing_drafts if d.get("email_id") == draft_request.email_id]
@@ -1067,12 +1086,20 @@ async def classify_demo_emails(
                 )
                 classification = await classifier.classify(email_msg)
                 classification.email_id = email_row["id"]
+
+                # Check if classification used fallback - if so, skip saving it
+                is_fallback = classification.is_fallback
+
+                if is_fallback:
+                    logger.warning("Deterministic fallback left a demo message unclassified")
+                    provider_used = "fallback-deterministic"
+                    skipped_count += 1
+                    continue
+
                 await db.save_classification(classification)
 
-                # Track whether fallback was actually used
-                if classification.reason and "fallback" in classification.reason.lower():
-                    provider_used = "fallback-deterministic"
-                elif settings.openrouter_api_key:
+                # Track provider used
+                if settings.openrouter_api_key:
                     provider_used = "openrouter"
 
                 labels = label_mapper.category_to_labels(
@@ -1083,7 +1110,7 @@ async def classify_demo_emails(
 
                 classified_count += 1
             except Exception as exc:
-                logger.error("Classification failed for email %s (%s)", email_row["id"], type(exc).__name__)
+                logger.error("Demo classification failed (%s)", type(exc).__name__)
                 error_count += 1
 
         actual_model = settings.openrouter_model if (provider_used == "openrouter" and settings.openrouter_api_key) else "fallback-deterministic"

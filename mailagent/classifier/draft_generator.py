@@ -4,12 +4,15 @@ Draft generation with user voice profile integration
 
 import httpx
 import json
+import logging
 from typing import List, Optional
 
 from mailagent.core.types import EmailMessage, UserVoiceProfile, Draft
 from mailagent.core.config import settings
 from mailagent.llm.base import LLMMessage
 from mailagent.llm.registry import ProviderRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class DraftGenerator:
@@ -31,8 +34,12 @@ class DraftGenerator:
         thread: Optional[List[EmailMessage]] = None,
         user_guidelines: Optional[str] = None,
         voice_profile: Optional[UserVoiceProfile] = None
-    ) -> str:
-        """Generate a draft reply matching user's writing style"""
+    ) -> Optional[str]:
+        """Generate a draft reply matching user's writing style.
+
+        Returns:
+            The draft text if generation was successful, None if provider failed.
+        """
 
         # Build context
         context = self._build_context(email, thread)
@@ -44,21 +51,44 @@ class DraftGenerator:
         if self.provider_registry:
             try:
                 response = await self._call_via_provider(prompt)
-            except Exception:
-                # Provider failure - return empty draft to allow fallback handling
-                return ""
+            except Exception as exc:
+                # Provider failure - log and return None to indicate failure
+                logger.error("Draft generation failed (%s)", type(exc).__name__)
+                return None
         else:
-            response = await self._call_claude(prompt)
+            try:
+                response = await self._call_claude(prompt)
+            except Exception as exc:
+                logger.error("Direct Claude call failed (%s)", type(exc).__name__)
+                return None
 
         # Extract draft content
-        return response.get("draft", "")
+        draft = response.get("draft", "")
+
+        # Validate draft is meaningful (not empty or obviously a fallback template)
+        if not draft or not draft.strip():
+            logger.warning("Generated draft was empty")
+            return None
+
+        # Check for fallback indicators
+        fallback_indicators = [
+            "deterministic fallback",
+            "this is a fallback response",
+            "configure an ai provider",
+        ]
+        draft_lower = draft.lower()
+        if any(indicator in draft_lower for indicator in fallback_indicators):
+            logger.warning("Draft output matched a fallback response")
+            return None
+
+        return draft
 
     async def generate_draft_batch(
         self,
         emails: List[EmailMessage],
         user_guidelines: Optional[str] = None,
         voice_profile: Optional[UserVoiceProfile] = None
-    ) -> List[str]:
+    ) -> List[Optional[str]]:
         """Generate drafts for multiple emails"""
         drafts = []
         for email in emails:
@@ -129,12 +159,13 @@ INSTRUCTIONS:
 1. Write a professional, helpful reply
 2. Match the user's voice profile as specified above
 3. Keep it concise and to the point
-4. Address the sender's question or request directly
+4. Address the sender's question or request directly - if they ask for a choice between options, either pick one based on context or ask for clarification
 5. Use the user's typical greeting and sign-off style
 6. Include the user's common phrases where appropriate
 7. DO NOT include any instructions or meta-commentary
 8. DO NOT include "Here's a draft" or similar text
-9. Output ONLY the email content
+9. DO NOT use generic acknowledgments like "I'll look into it" - be specific and responsive
+10. Output ONLY the email content
 
 Respond in JSON format:
 {{

@@ -3,6 +3,7 @@ Main email agent orchestrator
 """
 
 import asyncio
+import logging
 from typing import List, Optional
 from datetime import datetime
 
@@ -26,6 +27,8 @@ from mailagent.policy.rate_limiter import RateLimiter
 from mailagent.core.config import settings
 from mailagent.llm.registry import ProviderRegistry, ModelSlot
 from mailagent.llm.claude_provider import ClaudeProvider
+
+logger = logging.getLogger(__name__)
 
 
 class EmailAgent:
@@ -320,6 +323,11 @@ class EmailAgent:
         draft_content = await self.draft_generator.generate_draft(
             email, thread, user_guidelines, self.voice_profile
         )
+        if draft_content is None:
+            # Keep provider failures from becoming invalid Draft models or
+            # entering the send flow. The email remains classified for retry.
+            logger.warning("Draft generation failed; message remains classified without a draft")
+            return
 
         # Create draft object
         draft = Draft(

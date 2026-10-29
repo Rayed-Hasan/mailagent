@@ -54,6 +54,7 @@ class GmailSyncService:
             "new": 0,
             "duplicates": 0,
             "errors": 0,
+            "unclassified": 0,
             "synced_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -86,6 +87,10 @@ class GmailSyncService:
                 # Classify email using AI (OpenRouter or labelled fallback)
                 classification = await self.classifier.classify(email)
                 classification.email_id = email_id
+                if classification.is_fallback:
+                    stats["unclassified"] += 1
+                    logger.warning("Deterministic fallback left a synced message unclassified")
+                    continue
                 classification_id = await self.db.save_classification(classification)
 
                 # Assign labels

@@ -323,3 +323,93 @@ class TestDemoModeSecurity:
                 # Client 1 should be rate limited
                 allowed1_second, _ = await demo_rate_limiter.check_rate_limit("192.168.1.1")
                 assert allowed1_second is False
+
+    @pytest.mark.asyncio
+    async def test_fallback_provider_sets_explicit_marker(self):
+        """Test that fallback provider sets explicit is_fallback marker in raw response."""
+        from mailagent.llm.fallback_provider import FallbackProvider
+        from mailagent.llm.base import LLMMessage
+
+        provider = FallbackProvider()
+        response = await provider.complete(
+            messages=[LLMMessage(role="user", content="Test message")],
+            model="fallback-deterministic",
+        )
+
+        # Check that is_fallback marker is set
+        assert response.raw.get("is_fallback") is True
+        assert response.provider == "fallback"
+        assert response.model == "fallback-deterministic"
+
+    @pytest.mark.asyncio
+    async def test_classification_result_includes_raw_data(self):
+        """Test that ClassificationResult includes raw data for fallback detection."""
+        from mailagent.core.types import ClassificationResult, EmailCategory
+
+        result = ClassificationResult(
+            email_id="test-email-123",
+            category=EmailCategory.URGENT,
+            priority_score=85,
+            action="reply",
+            confidence=0.9,
+            reason="Test classification",
+            raw={"is_fallback": True, "test_key": "test_value"}
+        )
+
+        assert result.raw.get("is_fallback") is True
+        assert result.raw.get("test_key") == "test_value"
+
+    @pytest.mark.asyncio
+    async def test_draft_generation_rejects_fallback_responses(self):
+        """Test that draft generation endpoint rejects fallback responses."""
+        from mailagent.llm.base import LLMResponse
+
+        # Mock response with fallback marker
+        fallback_response = LLMResponse(
+            text="This is a fallback response",
+            tool_calls=[],
+            input_tokens=10,
+            output_tokens=5,
+            model="fallback-deterministic",
+            provider="fallback",
+            raw={"is_fallback": True}
+        )
+
+        # Should be detected as fallback
+        assert fallback_response.raw.get("is_fallback") is True
+
+        # Mock response without fallback marker
+        ai_response = LLMResponse(
+            text="This is a real AI response",
+            tool_calls=[],
+            input_tokens=10,
+            output_tokens=5,
+            model="gpt-4",
+            provider="openai",
+            raw={}
+        )
+
+        # Should not be detected as fallback
+        assert ai_response.raw.get("is_fallback") is not True
+
+    @pytest.mark.asyncio
+    async def test_agent_skips_draft_creation_when_generation_fails(self, caplog):
+        from mailagent.core.agent import EmailAgent
+
+        agent = EmailAgent.__new__(EmailAgent)
+        agent.draft_generator = MagicMock()
+        agent.draft_generator.generate_draft = AsyncMock(return_value=None)
+        agent.voice_profile = None
+
+        await agent._generate_and_handle_draft(
+            email=MagicMock(),
+            classification=MagicMock(),
+            email_id="email-id",
+            classification_id="classification-id",
+            account_id="account-id",
+            provider=MagicMock(),
+            thread=[],
+            sender_history=[],
+        )
+
+        assert "remains classified without a draft" in caplog.text

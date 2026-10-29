@@ -72,6 +72,14 @@ class ClassificationResult(BaseModel):
     action: EmailAction
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
+    raw: Dict[str, Any] = Field(default_factory=dict)  # Store raw response data for fallback detection
+
+    @property
+    def is_fallback(self) -> bool:
+        """Identify deterministic classifier output before presenting it as AI work."""
+        return bool(self.raw.get("is_fallback")) or (
+            "deterministic fallback classification" in self.reason.casefold()
+        )
 
 
 class Draft(BaseModel):

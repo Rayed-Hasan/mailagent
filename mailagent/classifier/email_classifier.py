@@ -353,5 +353,6 @@ Respond in JSON format only:
             priority_score=response["priority_score"],
             action=response["action"],
             confidence=response["confidence"],
-            reason=response["reason"]
+            reason=response["reason"],
+            raw=response  # Store raw response for fallback detection
         )

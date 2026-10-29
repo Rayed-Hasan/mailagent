@@ -65,7 +65,46 @@ async def test_fictional_message_saves_and_returns_complete_ai_reply():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_text", ["", "not-json", '{"reply":"  "}', "{}"])
+@pytest.mark.parametrize(
+    "model_text, expected",
+    [
+        ("Thanks, Thursday works for me. Please share the final rehearsal details.",
+         "Thanks, Thursday works for me. Please share the final rehearsal details."),
+        ("```json\n{\"reply\":\"Could you choose the time?\"}\n```", "Could you choose the time?"),
+    ],
+)
+async def test_plain_text_and_fenced_json_replies_are_saved(model_text, expected):
+    email = {
+        "id": "fictional-email-compatible-output",
+        "account_id": dashboard.get_demo_account_id(),
+        "thread_id": None,
+        "subject": "A fictional rehearsal",
+        "body": "Could you pick a time for the demo?",
+    }
+    mock_db = MagicMock()
+    mock_db.get_email = AsyncMock(return_value=email)
+    mock_db.get_classification = AsyncMock(return_value={"id": "classification-3"})
+    mock_db.get_pending_drafts = AsyncMock(return_value=[])
+    mock_db.save_draft = AsyncMock(return_value="draft-3")
+
+    with patch.object(settings, "public_demo_mode", True), \
+         patch.object(dashboard, "db", mock_db), \
+         patch.object(dashboard, "demo_gmail_provider", None), \
+         patch.object(dashboard, "get_client_ip", AsyncMock(return_value="127.0.0.1")), \
+         patch.object(dashboard.demo_rate_limiter, "release_request", AsyncMock()), \
+         patch("mailagent.demo.demo_provider.complete_demo", AsyncMock(return_value=(_response(model_text), False))):
+        result = await dashboard.generate_demo_draft(
+            http_request=MagicMock(),
+            draft_request=dashboard.DemoDraftRequest(email_id=email["id"]),
+            user_id="demo-user-judge",
+        )
+
+    assert result["content"] == expected
+    assert mock_db.save_draft.await_args.args[0].content == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_text", ["", "not-json", "short", '{"reply":"  "}', "{}", "[1, 2]"])
 async def test_empty_or_malformed_model_reply_is_not_saved(model_text):
     email = {
         "id": "fictional-email-2",

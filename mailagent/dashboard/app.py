@@ -212,6 +212,41 @@ class DemoSendRequest(BaseModel):
     draft_id: str
 
 
+def _extract_reply_body(model_text: Any) -> str:
+    """Accept structured JSON and ordinary text replies, but never empty output."""
+    if not isinstance(model_text, str):
+        return ""
+
+    text = model_text.strip()
+    if not text:
+        return ""
+
+    # Some OpenRouter model routes honor JSON mode but wrap the result in a
+    # Markdown fence. Strip only a complete outer fence before parsing.
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            text = "\n".join(lines[1:-1]).strip()
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # A few compatible routes return the requested reply as plain text.
+        # Reject short fragments, which are more likely a malformed response
+        # than a complete email reply.
+        words = text.split()
+        if text.startswith(("{", "[")) or len(text) < 12 or len(words) < 2:
+            return ""
+        return text
+
+    if isinstance(parsed, dict):
+        reply = parsed.get("reply")
+        return reply.strip() if isinstance(reply, str) else ""
+    if isinstance(parsed, str):
+        return parsed.strip()
+    return ""
+
+
 async def require_account_owner(account_id: str, user_id: str) -> Dict:
     # In demo mode, bypass account owner check for configured demo account
     if settings.public_demo_mode and account_id == get_demo_account_id() and user_id == get_demo_user_id():
@@ -684,16 +719,14 @@ async def generate_demo_draft(
 
         # Structured response must contain a non-empty reply body. Never store
         # the wrapper JSON or report success when the model returned no body.
-        try:
-            parsed_reply = json.loads(response.text)
-        except (TypeError, json.JSONDecodeError):
-            parsed_reply = None
-        draft_content = (
-            parsed_reply.get("reply", "").strip()
-            if isinstance(parsed_reply, dict) and isinstance(parsed_reply.get("reply"), str)
-            else ""
-        )
+        draft_content = _extract_reply_body(response.text)
         if not draft_content:
+            logger.warning(
+                "AI draft response was empty or malformed (provider=%s, model=%s, chars=%s)",
+                response.provider,
+                response.model,
+                len(response.text) if isinstance(response.text, str) else "non-text",
+            )
             raise HTTPException(
                 status_code=502,
                 detail="Draft generation failed: AI provider returned an empty or invalid reply"

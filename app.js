@@ -337,6 +337,26 @@ function queryParams() {
 }
 
 async function fetchInbox(append = false) {
+  // If in special views (drafts, sent, archive)
+  if (inboxState.activeNav === "drafts") {
+    loadMoreButton.hidden = true;
+    setConnectionStatus("Drafts · Review Queue", true);
+    setMailListState("No pending drafts. Open any priority email and click '✦ Generate AI Reply Draft' to test.");
+    return true;
+  }
+  if (inboxState.activeNav === "sent") {
+    loadMoreButton.hidden = true;
+    setConnectionStatus("Sent Messages · Protected", true);
+    setMailListState("Outbound sending is disabled in public demo mode. Sent folder is read-only.");
+    return true;
+  }
+  if (inboxState.activeNav === "archive") {
+    loadMoreButton.hidden = true;
+    setConnectionStatus("Archive", true);
+    setMailListState("No archived threads in current session.");
+    return true;
+  }
+
   // In demo mode, don't require token
   if (!inboxState.isDemoMode && (!apiConfig.baseUrl || !apiConfig.token)) {
     setConnectionStatus("Connect an inbox to begin");
@@ -587,6 +607,63 @@ function handleNavigation(hash) {
   inboxState.offset = 0;
   fetchInbox();
 }
+
+// Bind settings dialog
+const settingsDialog = document.querySelector("#settingsDialog");
+const closeSettings = document.querySelector("#closeSettings");
+if (closeSettings && settingsDialog) {
+  closeSettings.addEventListener("click", () => settingsDialog.close());
+}
+function openSettingsModal() {
+  if (settingsDialog) settingsDialog.showModal();
+}
+
+// Bind topbar and footer buttons
+const searchBtn = document.querySelector("#searchButton");
+if (searchBtn) searchBtn.addEventListener("click", () => togglePalette(true));
+
+const notifBtn = document.querySelector("#notificationButton");
+if (notifBtn) notifBtn.addEventListener("click", () => {
+  showToast("Notifications: Mailbox is synced and operating in Approve Mode.");
+});
+
+const helpBtn = document.querySelector("#helpButton");
+if (helpBtn) helpBtn.addEventListener("click", () => {
+  showToast("MailAgent: Privacy-first email assistant. Press ⌘K for command palette.");
+});
+
+// Bind palette backdrop and shortcut
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    togglePalette(true);
+  }
+  if (e.key === "Escape" && palette.classList.contains("open")) {
+    togglePalette(false);
+  }
+});
+const paletteBackdrop = document.querySelector(".palette-backdrop");
+if (paletteBackdrop) {
+  paletteBackdrop.addEventListener("click", () => togglePalette(false));
+}
+
+// Command palette buttons
+document.querySelectorAll(".palette-actions button").forEach((btn, idx) => {
+  btn.addEventListener("click", () => {
+    togglePalette(false);
+    if (idx === 0) showToast("MailAgent: All high-priority items are marked in your inbox.");
+    if (idx === 1) handleNavigation("#inbox");
+    if (idx === 2) openSettingsModal();
+  });
+});
+
+// Settings links (footer and palette)
+document.querySelectorAll("a[href='#settings']").forEach((link) => {
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    openSettingsModal();
+  });
+});
 
 // Listen for sidebar nav clicks and hash changes
 document.querySelectorAll(".main-nav a.nav-item").forEach((link) => {

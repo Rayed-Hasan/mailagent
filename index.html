@@ -56,9 +56,9 @@
           <div class="topbar-actions">
             <button class="mode-pill" id="modeButton"><span></span> Approve mode</button>
             <div class="usage-chip" title="Your AI token usage today"><span class="usage-bar"><i></i></span><span id="tokenUsageText">0 tokens</span></div>
-            <button class="icon-button" aria-label="Search">⌕</button>
-            <button class="icon-button has-notification" aria-label="Notifications">♧<span></span></button>
-            <button class="help-button">?</button>
+            <button class="icon-button" id="searchButton" aria-label="Search">⌕</button>
+            <button class="icon-button has-notification" id="notificationButton" aria-label="Notifications">♧<span></span></button>
+            <button class="help-button" id="helpButton">?</button>
           </div>
         </header>
 
@@ -151,6 +151,30 @@
       </div>
     </div>
     <div class="toast" id="toast" role="status"><span>✦</span> MailAgent is preparing your morning brief...</div>
+        <!-- Settings Modal -->
+    <dialog id="settingsDialog" class="email-detail" style="max-width: 520px;">
+      <button id="closeSettings" class="detail-close" type="button" aria-label="Close settings">×</button>
+      <p class="eyebrow">SETTINGS &amp; PRIVACY</p>
+      <h2 style="margin-bottom: 1rem;">Workspace Configuration</h2>
+      <div style="display: grid; gap: 1rem; font-size: 13px; line-height: 1.5;">
+        <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
+          <strong>Deployment Mode</strong><br />
+          <span style="color: var(--muted);">Local-First (Personal SQLite storage on host)</span>
+        </div>
+        <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
+          <strong>AI Provider (BYOK)</strong><br />
+          <span style="color: var(--muted);">Configured via server environment. Deterministic fallback enabled if offline.</span>
+        </div>
+        <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
+          <strong>Autonomy Mode</strong><br />
+          <span style="color: var(--muted);">Approve Every Send (Zero autonomous outbound mail without review)</span>
+        </div>
+        <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
+          <strong>Emergency Stop / Kill Switch</strong><br />
+          <span style="color: var(--muted);">Active. Public sending is strictly disabled in demo mode.</span>
+        </div>
+      </div>
+    </dialog>
     <script src="app.js"></script>
   </body>
 </html>

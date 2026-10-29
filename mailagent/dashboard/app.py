@@ -166,17 +166,9 @@ async def initialize_database() -> None:
                     )
                     demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
 
-        # If after startup there are still 0 emails in demo account, seed initial demo messages
-        # so judges and visitors immediately have a rich, populated mailbox to test AI classification and drafts
-        try:
-            account_id = get_demo_account_id()
-            existing_emails = await db.get_emails_by_account(account_id, limit=1)
-            if not existing_emails:
-                seeder = DemoSeeder(db)
-                await seeder.seed_demo_data()
-                logger.info("Seeded initial demo mailbox with synthetic sample messages for evaluation")
-        except Exception as seed_err:
-            logger.warning("Could not auto-seed demo mailbox: %s", seed_err)
+        # Auto-seeding disabled in production demo to prevent synthetic messages
+        # from fabricating real mailbox contents. Seeding is only permitted via explicit test setup.
+        logger.info("Production demo started without synthetic auto-seeding.")
 
 
 @app.on_event("shutdown")
@@ -1050,6 +1042,12 @@ async def classify_demo_emails(
                 classification.email_id = email_row["id"]
                 await db.save_classification(classification)
 
+                # Track whether fallback was actually used
+                if classification.reason and "fallback" in classification.reason.lower():
+                    provider_used = "fallback-deterministic"
+                elif settings.openrouter_api_key:
+                    provider_used = "openrouter"
+
                 labels = label_mapper.category_to_labels(
                     classification.category, classification.priority_score
                 )
@@ -1061,13 +1059,14 @@ async def classify_demo_emails(
                 logger.error("Classification failed for email %s (%s)", email_row["id"], type(exc).__name__)
                 error_count += 1
 
+        actual_model = settings.openrouter_model if (provider_used == "openrouter" and settings.openrouter_api_key) else "fallback-deterministic"
         return {
             "classified": classified_count,
             "skipped": skipped_count,
             "errors": error_count,
             "total": len(all_emails),
             "provider": provider_used,
-            "model": settings.openrouter_model if settings.openrouter_api_key else "fallback-deterministic",
+            "model": actual_model,
         }
     finally:
         await demo_rate_limiter.release_request(client_ip)

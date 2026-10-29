@@ -167,7 +167,10 @@
         </div>
         <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
           <strong>Autonomy Mode</strong><br />
-          <span style="color: var(--muted);">Approve Every Send (Zero autonomous outbound mail without review)</span>
+          <span id="autoReplyStatus" style="color: var(--muted);">Approve every send</span>
+          <div id="autoReplyControls" style="margin-top: 10px;">
+            <button id="toggleAutoReply" class="secondary-button" type="button">Enable safe auto replies</button>
+          </div>
         </div>
         <div style="background: rgba(0,0,0,0.03); padding: 12px; border: 2px solid var(--ink);">
           <strong>Emergency Stop / Kill Switch</strong><br />

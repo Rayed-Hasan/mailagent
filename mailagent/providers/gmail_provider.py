@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import re
 import logging
+from email.message import EmailMessage as MIMEEmailMessage
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -266,17 +267,29 @@ class GmailProvider(EmailProviderInterface):
         subject: str,
         body: str,
         in_reply_to: Optional[str] = None,
-        thread_id: Optional[str] = None
+        thread_id: Optional[str] = None,
+        references: Optional[List[str]] = None
     ) -> str:
         """Create a Gmail draft"""
+        if not body or not body.strip():
+            raise ValueError("Refusing to create an empty email draft")
         if not self.service:
-            await self.connect()
+            if not await self.connect():
+                return ""
 
         try:
+            mime_message = MIMEEmailMessage()
+            mime_message["To"] = to
+            mime_message["Subject"] = subject
+            if in_reply_to:
+                mime_message["In-Reply-To"] = in_reply_to
+                reference_chain = list(references or [])
+                if in_reply_to not in reference_chain:
+                    reference_chain.append(in_reply_to)
+                mime_message["References"] = " ".join(reference_chain)
+            mime_message.set_content(body)
             message = {
-                'raw': base64.urlsafe_b64encode(
-                    f"Subject: {subject}\nTo: {to}\n\n{body}".encode()
-                ).decode()
+                "raw": base64.urlsafe_b64encode(mime_message.as_bytes()).decode().rstrip("=")
             }
 
             if thread_id:

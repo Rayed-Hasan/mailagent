@@ -533,8 +533,12 @@ async function openEmail(emailId) {
             throw new Error(err.detail || "Draft generation failed");
           }
           const draftData = await draftRes.json();
-          draftMeta.textContent = `Provider: ${draftData.provider} (${draftData.model}) · ${draftData.fallback ? "Deterministic Fallback" : "Live AI"}`;
-          draftContent.textContent = draftData.content;
+          const replyBody = typeof draftData.content === "string" ? draftData.content.trim() : "";
+          if (!replyBody || draftData.fallback) {
+            throw new Error("The AI provider did not return a usable reply. No draft was saved.");
+          }
+          draftMeta.textContent = `AI-generated · ${draftData.provider} (${draftData.model})`;
+          draftContent.textContent = replyBody;
           draftArea.style.display = "block";
           generateBtn.textContent = "✦ Regenerate Reply Draft";
           addTokenUsage(draftData.tokens || 350);
@@ -697,7 +701,65 @@ if (closeSettings && settingsDialog) {
 }
 function openSettingsModal() {
   if (settingsDialog) settingsDialog.showModal();
+  loadAutoReplySetting();
 }
+
+async function loadAutoReplySetting() {
+  const status = document.querySelector("#autoReplyStatus");
+  const controls = document.querySelector("#autoReplyControls");
+  const button = document.querySelector("#toggleAutoReply");
+  if (!status || !controls || !button) return;
+  if (inboxState.isDemoMode) {
+    status.textContent = "Approval mode · automatic sending is disabled in the public demo";
+    controls.hidden = true;
+    return;
+  }
+  if (!apiConfig.token) {
+    status.textContent = "Connect as the owner to configure automatic replies";
+    controls.hidden = true;
+    return;
+  }
+  controls.hidden = false;
+  status.textContent = "Loading setting…";
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/owner/auto-reply`, {
+      headers: { Authorization: `Bearer ${apiConfig.token}` },
+    });
+    if (!response.ok) throw new Error("Could not load setting");
+    const setting = await response.json();
+    button.dataset.enabled = String(setting.enabled);
+    button.textContent = setting.enabled ? "Disable automatic replies" : "Enable safe auto replies";
+    status.textContent = setting.enabled
+      ? "Safe auto replies are on · only eligible routine messages can be sent"
+      : "Approval mode · replies stay as drafts until approved";
+  } catch (_error) {
+    status.textContent = "Could not load automatic-reply setting";
+  }
+}
+
+document.querySelector("#toggleAutoReply")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const enabled = button.dataset.enabled !== "true";
+  button.disabled = true;
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/owner/auto-reply`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiConfig.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not save setting");
+    await loadAutoReplySetting();
+    showToast(enabled ? "Safe automatic replies enabled" : "Automatic replies disabled");
+  } catch (error) {
+    showToast(error.message || "Could not save automatic-reply setting");
+  } finally {
+    button.disabled = false;
+  }
+});
 
 // Bind topbar and footer buttons
 const searchBtn = document.querySelector("#searchButton");

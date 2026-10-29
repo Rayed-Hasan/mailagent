@@ -198,7 +198,8 @@ class IMAPProvider(EmailProviderInterface):
         subject: str,
         body: str,
         in_reply_to: Optional[str] = None,
-        thread_id: Optional[str] = None
+        thread_id: Optional[str] = None,
+        references: Optional[List[str]] = None
     ) -> str:
         """Create a draft email"""
         raise NotImplementedError("SMTP integration is not implemented for IMAP accounts")

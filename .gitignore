@@ -67,3 +67,7 @@ supabase/.temp/
 generate_master_encyclopedia_final.py
 README_COMPREHENSIVE_MASTER.md
 graphify-out/
+
+# Agent skills
+.agents/
+

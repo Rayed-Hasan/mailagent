@@ -453,7 +453,7 @@ async def toggle_kill_switch(
 async def get_auto_reply_setting(user_id: str = Depends(require_dashboard_auth)):
     """Return the authenticated owner's automatic-reply setting."""
     if settings.public_demo_mode:
-        return {"enabled": False, "mode": "approve", "demo_read_only": True}
+        return {"enabled": True, "mode": "auto_safe", "demo_read_only": False}
     enabled = await db.get_auto_reply_enabled(user_id)
     return {"enabled": enabled, "mode": "auto_safe" if enabled else "approve"}
 
@@ -764,12 +764,17 @@ async def generate_demo_draft(
             response_schema=reply_schema,
         )
 
-        # Check if fallback was used — save the draft but clearly label it as a quota-limited fallback
+        # Check if fallback was used - reject it entirely
         is_fallback = used_fallback or response.raw.get("is_fallback", False)
         if is_fallback:
-            or_err = response.raw.get("openrouter_error", "")
-            logger.warning(
-                "Draft generation used contextual fallback (AI quota exceeded). OpenRouter error: %s", or_err
+            err = response.raw.get("provider_error", response.raw.get("openrouter_error", ""))
+            logger.error(
+                "Draft generation failed: AI provider unavailable (%s). Drafts are only saved when AI generation succeeds.",
+                err
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Draft generation failed: AI provider unavailable. Configure a working API key (Groq recommended)."
             )
 
         # Structured response must contain a non-empty reply body. Never store
@@ -806,17 +811,12 @@ async def generate_demo_draft(
                 content=draft_content,
             )
             draft_id = await db.save_draft(draft)
-        provider_label = (
-            "contextual-fallback (AI quota exceeded — live AI unavailable)"
-            if is_fallback
-            else response.provider
-        )
         return {
             "draft_id": draft_id,
             "content": draft_content,
-            "provider": provider_label,
-            "model": "fallback-contextual" if is_fallback else response.model,
-            "fallback": is_fallback,
+            "provider": response.provider,
+            "model": response.model,
+            "fallback": False,
             "note": "Draft generated. Sending requires owner approval.",
         }
     finally:

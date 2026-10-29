@@ -617,25 +617,3 @@ window.addEventListener("hashchange", () => handleNavigation(window.location.has
   }
 })();
 
-const onboardingDialog = document.querySelector("#onboardingDialog");
-const onboardingForm = document.querySelector("#onboardingForm");
-
-// Skip onboarding in demo mode — judges should not be blocked
-if (inboxState.isDemoMode || localStorage.getItem("mailagent.onboardingComplete")) {
-  // Don't show dialog
-} else {
-  // In non-demo mode, show onboarding for first-time users
-  if (!localStorage.getItem("mailagent.onboardingComplete")) {
-    onboardingDialog.showModal();
-  }
-}
-
-onboardingForm.addEventListener("submit", () => {
-  localStorage.setItem("mailagent.onboardingComplete", "true");
-  localStorage.setItem("mailagent.preferences", JSON.stringify({
-    deployment: document.querySelector("#onboardingMode").value,
-    ai: document.querySelector("#onboardingAi").value,
-    autonomy: document.querySelector("#onboardingAutonomy").value,
-  }));
-  showToast("Preferences saved. Connect your inbox to continue.");
-});

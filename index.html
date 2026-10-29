@@ -151,24 +151,6 @@
       </div>
     </div>
     <div class="toast" id="toast" role="status"><span>✦</span> MailAgent is preparing your morning brief...</div>
-    <dialog id="onboardingDialog" class="onboarding-dialog">
-      <form method="dialog" id="onboardingForm">
-        <p class="eyebrow">FIRST-RUN SETUP</p>
-        <h2>Set up your private workspace</h2>
-        <p class="onboarding-copy">Personal mode stores data in local SQLite and processes scheduled work locally. Email sync and cloud AI still contact the providers you choose.</p>
-        <label>Deployment mode
-          <select id="onboardingMode"><option value="personal">Personal · local-first</option><option value="enterprise">Enterprise · company-managed</option></select>
-        </label>
-        <label>AI mode
-          <select id="onboardingAi"><option value="local">Local model (no AI provider upload)</option><option value="byok">BYOK cloud provider (explicit key)</option></select>
-        </label>
-        <label>Autonomy
-          <select id="onboardingAutonomy"><option value="approve">Approve every send</option><option value="auto_safe">Auto-safe routine replies</option><option value="auto_full">Auto-full (advanced)</option></select>
-        </label>
-
-        <button class="primary-button" type="submit">Save preferences</button>
-      </form>
-    </dialog>
     <script src="app.js"></script>
   </body>
 </html>

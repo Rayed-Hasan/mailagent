@@ -771,15 +771,16 @@ async def generate_demo_draft(
         # the wrapper JSON or report success when the model returned no body.
         draft_content = _extract_reply_body(response.text)
         if not draft_content:
+            raw_preview = repr(response.text)[:200] if hasattr(response, "text") else "no-text"
             logger.warning(
-                "AI draft response was empty or malformed (provider=%s, model=%s, chars=%s)",
+                "AI draft response was empty or malformed (provider=%s, model=%s, raw=%s)",
                 response.provider,
                 response.model,
-                len(response.text) if isinstance(response.text, str) else "non-text",
+                raw_preview,
             )
             raise HTTPException(
                 status_code=502,
-                detail="Draft generation failed: AI provider returned an empty or invalid reply"
+                detail=f"Draft generation failed: AI provider returned empty or invalid reply (raw output: {raw_preview})"
             )
 
         # Update existing pending draft if one exists to avoid duplicates

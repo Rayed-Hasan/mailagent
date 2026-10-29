@@ -140,7 +140,12 @@ class OpenRouterProvider(LLMProvider):
                 message = choice.get("message") if isinstance(choice, dict) else None
                 if not isinstance(message, dict):
                     raise ValueError("OpenRouter returned a malformed assistant message")
+
+                # Extract text content from message. Check content, reasoning, and tool calls
                 text = self._extract_text_content(message.get("content"))
+                if not text and message.get("reasoning"):
+                    # Some reasoning models return thinking or reasoning fields
+                    text = self._extract_text_content(message.get("reasoning"))
 
                 # Parse tool calls if present
                 tool_calls = []

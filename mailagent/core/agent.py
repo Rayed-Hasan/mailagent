@@ -8,7 +8,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from mailagent.core.types import (
-    EmailMessage, EmailCategory, EmailAction, AutonomyMode,
+    EmailMessage, EmailCategory, EmailAction, AutonomyMode, DraftStatus,
     ClassificationResult, Draft, UserVoiceProfile, RateLimitInfo
 )
 from mailagent.core.database import Database
@@ -37,6 +37,7 @@ class EmailAgent:
     def __init__(self, user_id: str, autonomy_mode: AutonomyMode = None, storage_backend: str = None):
         self.user_id = user_id
         self.autonomy_mode = autonomy_mode or settings.default_autonomy_mode
+        self._autonomy_mode_explicit = autonomy_mode is not None
 
         # Initialize components
         self.db = Database(storage_backend=storage_backend)
@@ -59,6 +60,12 @@ class EmailAgent:
         """Initialize the agent"""
         # Initialize storage backend if needed
         await self.db.initialize()
+
+        # Sending is opt-in and always limited by the existing AUTO_SAFE policy.
+        enabled = await self.db.get_auto_reply_enabled(self.user_id)
+        if not self._autonomy_mode_explicit:
+            self.autonomy_mode = AutonomyMode.AUTO_SAFE if enabled else AutonomyMode.APPROVE
+        self.send_flow.set_autonomy_mode(self.autonomy_mode)
 
         # Load user voice profile
         profile_data = await self.db.get_voice_profile(self.user_id)
@@ -376,23 +383,45 @@ class EmailAgent:
 
         # If approved, send
         if status == DraftStatus.APPROVED:
+            if settings.public_demo_mode or await self.db.is_kill_switch_active():
+                await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
+                logger.info("Automatic reply blocked by demo mode or kill switch")
+                return
             # Create actual draft in email provider
-            provider_draft_id = await provider.create_draft(
-                to=email.sender_email,
-                subject=f"Re: {email.subject}",
-                body=draft_content,
-                in_reply_to=email.message_id,
-                thread_id=email.thread_id
-            )
+            try:
+                provider_draft_id = await provider.create_draft(
+                    to=email.sender_email,
+                    subject=f"Re: {email.subject}",
+                    body=draft_content,
+                    in_reply_to=email.raw_headers.get("Message-ID") or email.in_reply_to,
+                    thread_id=email.thread_id,
+                    references=email.references,
+                )
+            except Exception as exc:
+                await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
+                logger.warning("Gmail draft creation failed (%s); reply remains pending", type(exc).__name__)
+                return
+
+            if not provider_draft_id:
+                await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
+                logger.warning("Gmail did not create a reply draft; leaving reply pending")
+                return
 
             # Send the draft
-            if await provider.send_reply(provider_draft_id):
+            try:
+                sent = await provider.send_reply(provider_draft_id)
+            except Exception as exc:
+                sent = False
+                logger.warning("Gmail send failed (%s); reply remains pending", type(exc).__name__)
+
+            if sent:
                 await self.db.update_draft_status(draft_id, DraftStatus.SENT)
                 self.rate_limiter.record_reply(account_id, email.thread_id)
                 self.send_flow.record_sent(email_id)  # Record for idempotency
                 print(f"Sent reply: {email.subject}")
             else:
-                print(f"Failed to send reply: {email.subject}")
+                await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
+                logger.warning("Gmail did not confirm the send; reply remains pending for review")
 
     async def learn_voice_profile(self, account_id: str):
         """Learn user's voice profile from sent emails"""

@@ -17,6 +17,7 @@ async def complete_demo(
     *,
     role: str,
     max_tokens: int = 512,
+    response_schema=None,
 ) -> tuple[LLMResponse, bool]:
     """Use optional OpenRouter inference with an explicit deterministic fallback.
 
@@ -31,14 +32,26 @@ async def complete_demo(
     if provider.provider_name == "fallback":
         logger.info("Using deterministic fallback provider for %s", role)
         return (
-            await provider.complete(messages, model=model, max_tokens=max_tokens),
+            await provider.complete(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                response_schema=response_schema,
+                json_mode=response_schema is not None,
+            ),
             True,
         )
 
     # Try OpenRouter with detailed error logging
     try:
         logger.info("Attempting OpenRouter inference for %s with model %s", role, model)
-        response = await provider.complete(messages, model=model, max_tokens=max_tokens)
+        response = await provider.complete(
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            response_schema=response_schema,
+            json_mode=response_schema is not None,
+        )
         logger.info("OpenRouter inference successful for %s", role)
         return (response, False)
     except httpx.HTTPStatusError as exc:
@@ -64,6 +77,8 @@ async def complete_demo(
         messages,
         model="fallback-deterministic",
         max_tokens=max_tokens,
+        response_schema=response_schema,
+        json_mode=response_schema is not None,
     )
     return response, True
 

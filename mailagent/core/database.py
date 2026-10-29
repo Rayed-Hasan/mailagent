@@ -294,6 +294,8 @@ class Database:
     # Audit log operations
     async def log_audit(self, entry: AuditLogEntry) -> str:
         """Log an audit entry"""
+        if isinstance(entry, dict):
+            entry = AuditLogEntry.model_validate(entry)
         if self.storage:
             return await self.storage.log_audit(entry)
 
@@ -427,6 +429,26 @@ class Database:
 
         result = self.client.table("kill_switch").insert(data).execute()
         return len(result.data) > 0
+
+    async def get_auto_reply_enabled(self, user_id: str) -> bool:
+        if self.storage:
+            return await self.storage.get_auto_reply_enabled(user_id)
+        result = (
+            self.client.table("automation_settings")
+            .select("auto_reply_enabled")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data and result.data[0].get("auto_reply_enabled"))
+
+    async def set_auto_reply_enabled(self, user_id: str, enabled: bool) -> bool:
+        if self.storage:
+            return await self.storage.set_auto_reply_enabled(user_id, enabled)
+        result = self.client.table("automation_settings").upsert(
+            {"user_id": user_id, "auto_reply_enabled": enabled}
+        ).execute()
+        return bool(result.data)
 
     # Account operations
     async def save_account(self, user_id: str, provider: str, email_address: str, credentials: Dict[str, Any], account_id: Optional[str] = None) -> str:

@@ -26,6 +26,25 @@ class OpenRouterProvider(LLMProvider):
         self.api_key = api_key
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        """Normalize OpenAI-compatible string and multimodal text-part outputs."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict) and part.get("type") in ("text", "output_text"):
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        text_parts.append(text)
+            return "".join(text_parts)
+        if content is None:
+            return ""
+        raise ValueError("OpenRouter returned unsupported message content")
+
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -62,7 +81,14 @@ class OpenRouterProvider(LLMProvider):
 
         # Handle JSON mode via response_schema if provided
         if response_schema:
-            payload["response_format"] = {"type": "json_object", "schema": response_schema}
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "mailagent_reply",
+                    "strict": True,
+                    "schema": response_schema,
+                },
+            }
 
         # Handle tool calls if provided
         elif tools:
@@ -107,16 +133,18 @@ class OpenRouterProvider(LLMProvider):
                     data = response.json()
 
                 # Extract content from response
-                if "choices" not in data or not data["choices"]:
+                if not isinstance(data, dict) or not isinstance(data.get("choices"), list) or not data["choices"]:
                     raise ValueError("OpenRouter returned no choices")
 
                 choice = data["choices"][0]
-                message = choice.get("message", {})
-                text = message.get("content", "")
+                message = choice.get("message") if isinstance(choice, dict) else None
+                if not isinstance(message, dict):
+                    raise ValueError("OpenRouter returned a malformed assistant message")
+                text = self._extract_text_content(message.get("content"))
 
                 # Parse tool calls if present
                 tool_calls = []
-                if "tool_calls" in message:
+                if message.get("tool_calls"):
                     for tool_call in message["tool_calls"]:
                         tool_calls.append(
                             {

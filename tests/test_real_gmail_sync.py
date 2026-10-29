@@ -1,6 +1,8 @@
 """Comprehensive test suite for Real Gmail OAuth, Deduplication, Sync, and Owner Boundaries."""
 
 import pytest
+import base64
+from email import message_from_bytes
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
@@ -94,6 +96,16 @@ class TestGmailOAuthSecurityAndFlow:
         assert restored["credentials"]["refresh_token"] == "refresh-private"
 
     @pytest.mark.asyncio
+    async def test_auto_reply_setting_is_off_by_default_and_persists(self, clean_sqlite_storage, tmp_path):
+        await clean_sqlite_storage.initialize()
+        assert await clean_sqlite_storage.get_auto_reply_enabled("owner-1") is False
+        assert await clean_sqlite_storage.set_auto_reply_enabled("owner-1", True) is True
+        restarted = SQLiteStorage(clean_sqlite_storage.db_path, secret_store=SecretStore(key=b"0" * 32))
+        assert await restarted.get_auto_reply_enabled("owner-1") is True
+        await restarted.set_auto_reply_enabled("owner-1", False)
+        assert await clean_sqlite_storage.get_auto_reply_enabled("owner-1") is False
+
+    @pytest.mark.asyncio
     async def test_gmail_provider_token_refresh(self):
         """Test that expired credentials trigger refresh via Request()."""
         mock_creds = MagicMock()
@@ -112,6 +124,43 @@ class TestGmailOAuthSecurityAndFlow:
 
 class TestRealMessageNormalizationAndDeduplication:
     """Test duplicate prevention, parsing, and storage in SQLite."""
+
+    @pytest.mark.asyncio
+    async def test_gmail_reply_draft_uses_original_sender_thread_and_headers(self):
+        provider = GmailProvider({"token": "test"})
+        provider.service = MagicMock()
+        provider.service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+            "id": "draft-fictional-1"
+        }
+
+        draft_id = await provider.create_draft(
+            to="casey@example.invalid",
+            subject="Re: Meeting time",
+            body="Could you share which day works best?",
+            in_reply_to="<original@example.invalid>",
+            thread_id="gmail-thread-fictional",
+            references=["<earlier@example.invalid>"],
+        )
+
+        assert draft_id == "draft-fictional-1"
+        request = provider.service.users.return_value.drafts.return_value.create.call_args.kwargs
+        message = request["body"]["message"]
+        assert message["threadId"] == "gmail-thread-fictional"
+        raw = base64.urlsafe_b64decode(message["raw"] + "=" * (-len(message["raw"]) % 4))
+        mime = message_from_bytes(raw)
+        assert mime["To"] == "casey@example.invalid"
+        assert mime["Subject"] == "Re: Meeting time"
+        assert mime["In-Reply-To"] == "<original@example.invalid>"
+        assert mime["References"] == "<earlier@example.invalid> <original@example.invalid>"
+        assert "Could you share which day works best?" in mime.get_payload(decode=True).decode()
+
+    @pytest.mark.asyncio
+    async def test_gmail_provider_refuses_empty_reply_body(self):
+        provider = GmailProvider({"token": "test"})
+        with pytest.raises(ValueError, match="empty email draft"):
+            await provider.create_draft(
+                to="casey@example.invalid", subject="Re: Meeting", body="  "
+            )
 
     @pytest.mark.asyncio
     async def test_deduplication_prevents_duplicate_inserts(self, clean_sqlite_storage):

@@ -52,6 +52,14 @@ class SQLiteStorage(StorageInterface):
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS automation_settings (
+                user_id TEXT PRIMARY KEY,
+                auto_reply_enabled INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Email accounts table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS email_accounts (
@@ -652,6 +660,28 @@ class SQLiteStorage(StorageInterface):
             """, (kill_switch_id, datetime.now(timezone.utc).isoformat()))
             await db.commit()
 
+        return True
+
+    async def get_auto_reply_enabled(self, user_id: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT auto_reply_enabled FROM automation_settings WHERE user_id = ?",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            return bool(row[0]) if row else False
+
+    async def set_auto_reply_enabled(self, user_id: str, enabled: bool) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO automation_settings (user_id, auto_reply_enabled, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     auto_reply_enabled = excluded.auto_reply_enabled,
+                     updated_at = excluded.updated_at""",
+                (user_id, int(enabled), datetime.now(timezone.utc).isoformat()),
+            )
+            await db.commit()
         return True
 
     # Account operations

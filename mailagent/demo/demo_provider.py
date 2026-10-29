@@ -55,20 +55,26 @@ async def complete_demo(
         logger.info("OpenRouter inference successful for %s", role)
         return (response, False)
     except httpx.HTTPStatusError as exc:
+        err_body = exc.response.text[:300] if hasattr(exc, "response") and exc.response else ""
         if exc.response.status_code == 429:
-            logger.error("OpenRouter rate limited (429) for %s. Falling back to deterministic provider.", role)
+            logger.error("OpenRouter rate limited (429) for %s: %s. Falling back to deterministic provider.", role, err_body)
         else:
             logger.error(
-                "OpenRouter HTTP error %d for %s; falling back to deterministic provider",
+                "OpenRouter HTTP error %d for %s: %s; falling back to deterministic provider",
                 exc.response.status_code,
                 role,
+                err_body,
             )
+        # Store error message in fallback response raw for diagnostic visibility
+        last_error_msg = f"HTTP {exc.response.status_code}: {err_body}"
     except Exception as exc:
         logger.error(
-            "OpenRouter inference failed for %s (%s); falling back to deterministic provider",
+            "OpenRouter inference failed for %s (%s: %s); falling back to deterministic provider",
             role,
             type(exc).__name__,
+            exc,
         )
+        last_error_msg = f"{type(exc).__name__}: {exc}"
 
     # Fallback to deterministic provider
     logger.warning("Using deterministic fallback provider for %s after OpenRouter failure", role)
@@ -80,6 +86,8 @@ async def complete_demo(
         response_schema=response_schema,
         json_mode=response_schema is not None,
     )
+    if isinstance(response.raw, dict):
+        response.raw["openrouter_error"] = last_error_msg
     return response, True
 
 

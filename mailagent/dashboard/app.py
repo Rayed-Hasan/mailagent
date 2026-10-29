@@ -761,10 +761,11 @@ async def generate_demo_draft(
 
         # Check if fallback was used - reject the draft if so
         if used_fallback or response.raw.get("is_fallback", False):
-            logger.error("Draft generation used deterministic fallback; rejecting draft")
+            or_err = response.raw.get("openrouter_error", "")
+            logger.error("Draft generation used deterministic fallback; rejecting draft. OpenRouter error: %s", or_err)
             raise HTTPException(
                 status_code=503,
-                detail="Draft generation failed: AI provider unavailable (rate limited or not configured). Drafts are only saved when AI generation succeeds."
+                detail=f"Draft generation failed: AI provider unavailable (error: {or_err or 'rate limited or not configured'}). Drafts are only saved when AI generation succeeds."
             )
 
         # Structured response must contain a non-empty reply body. Never store

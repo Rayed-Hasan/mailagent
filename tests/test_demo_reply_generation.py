@@ -71,6 +71,8 @@ async def test_fictional_message_saves_and_returns_complete_ai_reply():
         ("Thanks, Thursday works for me. Please share the final rehearsal details.",
          "Thanks, Thursday works for me. Please share the final rehearsal details."),
         ("```json\n{\"reply\":\"Could you choose the time?\"}\n```", "Could you choose the time?"),
+        ("Here is the JSON requested:\n{\"reply\":\"Could you choose the time?\"}",
+         "Could you choose the time?"),
     ],
 )
 async def test_plain_text_and_fenced_json_replies_are_saved(model_text, expected):
@@ -104,7 +106,10 @@ async def test_plain_text_and_fenced_json_replies_are_saved(model_text, expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_text", ["", "not-json", "short", '{"reply":"  "}', "{}", "[1, 2]"])
+@pytest.mark.parametrize(
+    "model_text",
+    ["", "not-json", "short", "Here is the JSON requested:", '{"reply":"  "}', "{}", "[1, 2]"],
+)
 async def test_empty_or_malformed_model_reply_is_not_saved(model_text):
     email = {
         "id": "fictional-email-2",

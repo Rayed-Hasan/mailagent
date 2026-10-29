@@ -62,6 +62,24 @@ async def landing_styles():
     return FileResponse(frontend_dir / "landing.css")
 
 
+@app.get("/demo.mp4")
+async def landing_video():
+    """Serve the public landing page demo video."""
+    video_path = frontend_dir / "demo.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(video_path, media_type="video/mp4")
+
+
+@app.get("/demo.jpg")
+async def landing_video_poster():
+    """Serve the public landing page demo video poster."""
+    poster_path = frontend_dir / "demo.jpg"
+    if not poster_path.exists():
+        raise HTTPException(status_code=404, detail="Poster not found")
+    return FileResponse(poster_path, media_type="image/jpeg")
+
+
 # Database instance
 db = Database(force_demo_mode=settings.public_demo_mode)
 

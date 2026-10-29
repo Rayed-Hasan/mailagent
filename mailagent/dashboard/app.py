@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
+import aiosqlite
 
 logger = logging.getLogger("mailagent.dashboard")
 
@@ -511,9 +512,21 @@ async def get_drafts(
     try:
         await require_account_owner(account_id, user_id)
         drafts = await db.get_pending_drafts(account_id)
+        # Enrich each draft with the original email details if available
+        enriched_drafts = []
+        for d in drafts:
+            draft_item = dict(d)
+            if draft_item.get("email_id"):
+                em = await db.get_email(draft_item["email_id"])
+                if em:
+                    draft_item["subject"] = em.get("subject", "")
+                    draft_item["sender"] = em.get("sender", "")
+                    draft_item["sender_email"] = em.get("sender_email", "")
+            enriched_drafts.append(draft_item)
+
         if status:
-            drafts = [d for d in drafts if d["status"] == status]
-        return {"drafts": drafts}
+            enriched_drafts = [d for d in enriched_drafts if d["status"] == status]
+        return {"drafts": enriched_drafts}
     finally:
         if client_ip:
             await demo_rate_limiter.release_request(client_ip)
@@ -606,12 +619,24 @@ async def generate_demo_draft(
             role="drafting",
             max_tokens=300,
         )
-        draft = Draft(
-            email_id=draft_request.email_id,
-            classification_id=classification["id"],
-            content=response.text,
-        )
-        draft_id = await db.save_draft(draft)
+        # Update existing pending draft if one exists to avoid duplicates
+        existing_drafts = await db.get_pending_drafts(email.get("account_id") or demo_acc_id)
+        existing_for_email = [d for d in existing_drafts if d.get("email_id") == draft_request.email_id]
+        if existing_for_email:
+            draft_id = existing_for_email[0]["id"]
+            async with aiosqlite.connect(db.storage.db_path) as conn:
+                await conn.execute(
+                    "UPDATE drafts SET content = ?, updated_at = ? WHERE id = ?",
+                    (response.text, datetime.now(timezone.utc).isoformat(), draft_id)
+                )
+                await conn.commit()
+        else:
+            draft = Draft(
+                email_id=draft_request.email_id,
+                classification_id=classification["id"],
+                content=response.text,
+            )
+            draft_id = await db.save_draft(draft)
         return {
             "draft_id": draft_id,
             "content": response.text,

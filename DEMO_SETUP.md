@@ -62,7 +62,7 @@ uvicorn mailagent.dashboard.app:app --host 0.0.0.0 --port 8000
 4. Set environment variables:
    - `PUBLIC_DEMO_MODE=true`
    - `OPENROUTER_API_KEY` (optional - for real AI)
-   - `OPENROUTER_MODEL=google/gemma-2-9b-it:free`
+   - `OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free`
 5. Deploy
 
 The demo will be available at the Render-provided URL.
@@ -78,7 +78,7 @@ The demo will be available at the Render-provided URL.
 ### Optional for Demo Mode
 
 - `OPENROUTER_API_KEY` - OpenRouter API key for real AI inference
-- `OPENROUTER_MODEL` - OpenRouter model (default: `google/gemma-2-9b-it:free`)
+- `OPENROUTER_MODEL` - OpenRouter model (default: `google/gemma-4-26b-a4b-it:free`)
 - `DEMO_RATE_LIMIT_PER_MINUTE` - Max requests per minute per IP (default: 30)
 - `DEMO_MAX_CONCURRENT_REQUESTS` - Max concurrent requests per IP (default: 5)
 - `DEMO_RESET_ENDPOINT_ENABLED` - Enable reset endpoint (default: true)

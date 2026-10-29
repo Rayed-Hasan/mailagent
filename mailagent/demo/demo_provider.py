@@ -5,6 +5,9 @@ from mailagent.llm.openrouter_provider import OpenRouterProvider
 from mailagent.llm.fallback_provider import FallbackProvider
 from mailagent.llm.claude_provider import ClaudeProvider
 from mailagent.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 from mailagent.llm.base import LLMResponse
 
 
@@ -28,7 +31,8 @@ async def complete_demo(
             await provider.complete(messages, model=model, max_tokens=max_tokens),
             False,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("OpenRouter inference failed (%s: %s). Falling back to deterministic provider.", type(exc).__name__, exc)
         fallback = FallbackProvider()
         response = await fallback.complete(
             messages,

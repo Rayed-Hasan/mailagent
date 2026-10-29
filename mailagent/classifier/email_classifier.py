@@ -80,6 +80,10 @@ class EmailClassifier:
             category = EmailCategory.URGENT
             action = "flag_human"
             priority = 90
+        elif any(word in text for word in ("offer", "promo", "discount", "deal", "save ", "coupon", "% off", "sale")):
+            category = EmailCategory.PROMO
+            action = "archive"
+            priority = 20
         elif any(marker in sender for marker in ("noreply@", "no-reply@", "notification@")):
             category = EmailCategory.NOTIFICATION
             action = "archive"

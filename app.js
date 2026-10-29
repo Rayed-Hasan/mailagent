@@ -240,6 +240,59 @@ async function updateSidebarFromApi() {
   }
 }
 
+function renderDraftsList(drafts) {
+  mailList.replaceChildren();
+  drafts.forEach((draft) => {
+    const item = document.createElement("article");
+    item.className = "mail-item high-priority";
+    item.tabIndex = 0;
+    item.dataset.emailId = draft.email_id;
+
+    const check = document.createElement("div");
+    check.className = "mail-check";
+    check.setAttribute("aria-hidden", "true");
+
+    const avatar = document.createElement("div");
+    avatar.className = "sender-avatar purple";
+    avatar.textContent = "AI";
+
+    const body = document.createElement("div");
+    body.className = "mail-body";
+
+    const meta = document.createElement("div");
+    meta.className = "mail-meta";
+    const sender = document.createElement("strong");
+    sender.textContent = draft.sender || (draft.email_id ? `Reply to: ${draft.subject || "Message"}` : "AI Reply Draft");
+    const received = document.createElement("span");
+    received.textContent = formatDate(draft.created_at || draft.updated_at);
+    meta.append(sender, received);
+
+    const subject = document.createElement("h3");
+    subject.textContent = draft.subject ? `Draft Reply: ${draft.subject}` : "AI Draft Reply (Pending Approval)";
+
+    const preview = document.createElement("p");
+    preview.textContent = (draft.content || "").replace(/\s+/g, " ").slice(0, 180);
+
+    const tags = document.createElement("div");
+    tags.className = "mail-tags";
+    appendTag(tags, "Draft", "important-tag");
+    appendTag(tags, "Pending Review", "reply-tag");
+
+    body.append(meta, subject, preview, tags);
+
+    const more = document.createElement("button");
+    more.className = "more-button";
+    more.type = "button";
+    more.textContent = "Review";
+    item.append(check, avatar, body, more);
+
+    item.addEventListener("click", () => {
+      if (draft.email_id) openEmail(draft.email_id);
+    });
+    mailList.appendChild(item);
+  });
+}
+
 function renderRealEmails(emails, append = false) {
   if (!append) mailList.replaceChildren();
   if (!emails.length && !append) {
@@ -341,8 +394,36 @@ async function fetchInbox(append = false) {
   if (inboxState.activeNav === "drafts") {
     loadMoreButton.hidden = true;
     setConnectionStatus("Drafts · Review Queue", true);
-    setMailListState("No pending drafts. Open any priority email and click '✦ Generate AI Reply Draft' to test.");
-    return true;
+    setMailListState("Loading saved drafts...");
+    try {
+      if (!inboxState.accountId) {
+        const accRes = await fetch(`${apiConfig.baseUrl}/api/accounts`, {
+          headers: inboxState.isDemoMode ? {} : { Authorization: `Bearer ${apiConfig.token}` },
+        });
+        if (accRes.ok) {
+          const accData = await accRes.json();
+          if (accData.accounts && accData.accounts.length > 0) {
+            inboxState.accountId = accData.accounts[0].id;
+          }
+        }
+      }
+      const accId = inboxState.accountId || "demo-account-001";
+      const draftsRes = await fetch(`${apiConfig.baseUrl}/api/drafts?account_id=${encodeURIComponent(accId)}`, {
+        headers: inboxState.isDemoMode ? {} : { Authorization: `Bearer ${apiConfig.token}` },
+      });
+      if (!draftsRes.ok) throw new Error("Could not load drafts");
+      const draftsData = await draftsRes.json();
+      const draftsList = draftsData.drafts || [];
+      if (!draftsList.length) {
+        setMailListState("No pending drafts. Open any priority email and click '✦ Generate AI Reply Draft' to test.");
+        return true;
+      }
+      renderDraftsList(draftsList);
+      return true;
+    } catch (e) {
+      setMailListState(e.message || "Failed to load drafts", true);
+      return false;
+    }
   }
   if (inboxState.activeNav === "sent") {
     loadMoreButton.hidden = true;
@@ -678,6 +759,11 @@ window.addEventListener("hashchange", () => handleNavigation(window.location.has
 
 // Initialize: check for demo mode first, then try to load inbox
 (async function init() {
+  // Route initial hash if user navigated directly to #drafts, #sent, etc.
+  if (window.location.hash && window.location.hash !== "#inbox") {
+    handleNavigation(window.location.hash);
+  }
+
   const isDemo = await checkDemoMode();
   if (isDemo) {
     // Set sidebar counts to 0 initially (will update from API)

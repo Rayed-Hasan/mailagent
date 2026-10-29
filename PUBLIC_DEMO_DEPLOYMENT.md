@@ -77,7 +77,7 @@ identifier returned internally after successful authentication.
 ### AI Inference (OpenRouter)
 ```text
 OPENROUTER_API_KEY=<optional-openrouter-key>
-OPENROUTER_MODEL=google/gemma-2-9b-it:free
+OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free
 ```
 *Note: If `OPENROUTER_API_KEY` is not set or rate limits occur, MailAgent automatically uses the clearly labelled deterministic fallback provider.*
 

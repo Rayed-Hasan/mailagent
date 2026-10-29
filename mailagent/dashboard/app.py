@@ -213,7 +213,7 @@ class DemoSendRequest(BaseModel):
 
 
 def _extract_reply_body(model_text: Any) -> str:
-    """Accept structured JSON and ordinary text replies, but never empty output."""
+    """Accept structured JSON, markdown fences, and ordinary text replies, but never empty output."""
     if not isinstance(model_text, str):
         return ""
 
@@ -221,12 +221,17 @@ def _extract_reply_body(model_text: Any) -> str:
     if not text:
         return ""
 
-    # Some OpenRouter model routes honor JSON mode but wrap the result in a
-    # Markdown fence. Strip only a complete outer fence before parsing.
-    if text.startswith("```") and text.endswith("```"):
+    # Strip markdown code fences if present (e.g. ```json ... ``` or ``` ...)
+    if text.startswith("```"):
         lines = text.splitlines()
-        if len(lines) >= 3:
-            text = "\n".join(lines[1:-1]).strip()
+        # Find closing fence
+        end_idx = None
+        for i in range(len(lines) - 1, 0, -1):
+            if lines[i].strip().startswith("```"):
+                end_idx = i
+                break
+        if end_idx is not None and end_idx >= 1:
+            text = "\n".join(lines[1:end_idx]).strip()
 
     try:
         parsed = json.loads(text)
@@ -241,24 +246,42 @@ def _extract_reply_body(model_text: Any) -> str:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(embedded, dict):
-                    reply = embedded.get("reply")
+                    reply = embedded.get("reply") or embedded.get("content") or embedded.get("message")
                     if isinstance(reply, str) and reply.strip():
                         return reply.strip()
 
         # A few compatible routes return the requested reply as plain text.
-        # Reject short fragments and model commentary, which are not replies.
-        words = text.split()
+        # Strip common model commentary prefixes if the model wrote something like:
+        # "Here is the reply: Hi Jordan..."
         folded = text.casefold()
         commentary_prefixes = (
+            "here is the json requested:",
+            "here is the json requested",
+            "here is the json:",
             "here is the json",
+            "here's the json:",
             "here's the json",
+            "here is your json:",
             "here is your json",
-            "as an ai",
-            "i cannot provide",
+            "here is the reply:",
+            "here is the reply",
+            "here's the reply:",
+            "here's the reply",
+            "here is a draft reply:",
+            "here is a draft reply",
+            "here is your reply:",
+            "here is your reply",
         )
+        for prefix in commentary_prefixes:
+            if folded.startswith(prefix):
+                text = text[len(prefix):].strip()
+                folded = text.casefold()
+                break
+
+        words = text.split()
         if (
             text.startswith(("{", "["))
-            or folded.startswith(commentary_prefixes)
+            or folded.startswith(("as an ai", "i cannot provide"))
             or len(text) < 12
             or len(words) < 2
         ):
@@ -266,7 +289,7 @@ def _extract_reply_body(model_text: Any) -> str:
         return text
 
     if isinstance(parsed, dict):
-        reply = parsed.get("reply")
+        reply = parsed.get("reply") or parsed.get("content") or parsed.get("message")
         return reply.strip() if isinstance(reply, str) else ""
     if isinstance(parsed, str):
         return parsed.strip()

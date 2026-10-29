@@ -575,8 +575,10 @@ async def generate_demo_draft(
         email = await db.get_email(draft_request.email_id)
         if not email:
             raise HTTPException(status_code=404, detail="Demo email not found")
-        account = await db.get_account_for_email(draft_request.email_id)
-        if not account or account.get("id") != get_demo_account_id():
+
+        # Verify email belongs to demo account
+        demo_acc_id = get_demo_account_id()
+        if email.get("account_id") and email.get("account_id") != demo_acc_id:
             raise HTTPException(status_code=404, detail="Demo email not found")
 
         classification = await db.get_classification(draft_request.email_id)

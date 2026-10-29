@@ -107,8 +107,14 @@ def get_demo_provider_registry() -> ProviderRegistry:
     """
     registry = ProviderRegistry()
 
+    # Debug logging
+    logger.info("Checking for AI provider configuration...")
+    logger.info("GROQ_API_KEY configured: %s", bool(settings.groq_api_key))
+    logger.info("OPENROUTER_API_KEY configured: %s", bool(settings.openrouter_api_key))
+
     # Prefer Groq if API key is configured
     if settings.groq_api_key:
+        logger.info("Using Groq provider with model: %s", settings.groq_model)
         groq = GroqProvider(api_key=settings.groq_api_key)
         registry.register(groq)
 

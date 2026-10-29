@@ -79,6 +79,10 @@ class OpenRouterProvider(LLMProvider):
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
 
+        # Handle reasoning models on OpenRouter (disable reasoning tokens so completion is pure reply)
+        if "nemotron" in model or "reasoning" in model:
+            payload["reasoning"] = {"max_tokens": 0}
+
         # Handle JSON mode via response_schema if provided
         if response_schema:
             payload["response_format"] = {

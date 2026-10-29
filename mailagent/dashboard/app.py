@@ -334,7 +334,12 @@ async def health():
     result = {"status": "ok", "demo_mode": settings.public_demo_mode}
     if settings.public_demo_mode:
         result["gmail_connected"] = demo_mailbox_status.get("connected", False)
-        result["ai_provider"] = "openrouter" if settings.openrouter_api_key else "fallback"
+        if settings.groq_api_key:
+            result["ai_provider"] = "groq"
+        elif settings.openrouter_api_key:
+            result["ai_provider"] = "openrouter"
+        else:
+            result["ai_provider"] = "fallback"
     return result
 
 
@@ -802,7 +807,7 @@ async def generate_demo_draft(
             )
             draft_id = await db.save_draft(draft)
         provider_label = (
-            "contextual-fallback (OpenRouter quota exceeded — live AI unavailable)"
+            "contextual-fallback (AI quota exceeded — live AI unavailable)"
             if is_fallback
             else response.provider
         )
@@ -1039,8 +1044,16 @@ async def get_demo_status(
             "message_count": email_count,
             "last_sync": demo_mailbox_status.get("last_sync"),
             "last_error": demo_mailbox_status.get("last_error"),
-            "ai_provider": "openrouter" if settings.openrouter_api_key else "fallback",
-            "ai_model": settings.openrouter_model,
+            "ai_provider": (
+                "groq" if settings.groq_api_key
+                else "openrouter" if settings.openrouter_api_key
+                else "fallback"
+            ),
+            "ai_model": (
+                settings.groq_model if settings.groq_api_key
+                else settings.openrouter_model if settings.openrouter_api_key
+                else "fallback-deterministic"
+            ),
             "can_public_send": False,
             "note": "Messages in the public demo are retrieved from the dedicated demo mailbox."
         }

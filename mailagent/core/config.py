@@ -16,10 +16,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_ai_api_key: str = ""
     openrouter_api_key: str = ""
+    groq_api_key: str = ""
     mailagent_encryption_key: str = ""
     model_classification: str = "claude-3-5-haiku-latest"
     model_drafting: str = "claude-3-5-sonnet-latest"
     openrouter_model: str = "google/gemini-3.8-flash"
+    groq_model: str = "llama-3.1-8b-instant"
     monthly_budget_usd: float = 0.0
     max_replies_per_thread_per_day: int = 1
 

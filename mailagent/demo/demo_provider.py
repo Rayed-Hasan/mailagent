@@ -1,7 +1,8 @@
-"""Demo-specific AI provider setup using OpenRouter with fallback."""
+"""Demo-specific AI provider setup with Groq, OpenRouter, and fallback."""
 
 import httpx
 from mailagent.llm.registry import ProviderRegistry, ModelSlot
+from mailagent.llm.groq_provider import GroqProvider
 from mailagent.llm.openrouter_provider import OpenRouterProvider
 from mailagent.llm.fallback_provider import FallbackProvider
 from mailagent.llm.claude_provider import ClaudeProvider
@@ -19,7 +20,7 @@ async def complete_demo(
     max_tokens: int = 512,
     response_schema=None,
 ) -> tuple[LLMResponse, bool]:
-    """Use optional OpenRouter inference with an explicit deterministic fallback.
+    """Use optional Groq/OpenRouter inference with an explicit deterministic fallback.
 
     Returns:
         Tuple of (response, fallback_used) where fallback_used is True if
@@ -42,9 +43,10 @@ async def complete_demo(
             True,
         )
 
-    # Try OpenRouter with detailed error logging
+    # Try Groq/OpenRouter with detailed error logging
+    provider_name = provider.provider_name
     try:
-        logger.info("Attempting OpenRouter inference for %s with model %s", role, model)
+        logger.info("Attempting %s inference for %s with model %s", provider_name, role, model)
         response = await provider.complete(
             messages,
             model=model,
@@ -52,15 +54,16 @@ async def complete_demo(
             response_schema=response_schema,
             json_mode=response_schema is not None,
         )
-        logger.info("OpenRouter inference successful for %s", role)
+        logger.info("%s inference successful for %s", provider_name, role)
         return (response, False)
     except httpx.HTTPStatusError as exc:
         err_body = exc.response.text[:300] if hasattr(exc, "response") and exc.response else ""
         if exc.response.status_code == 429:
-            logger.error("OpenRouter rate limited (429) for %s: %s. Falling back to deterministic provider.", role, err_body)
+            logger.error("%s rate limited (429) for %s: %s. Falling back to deterministic provider.", provider_name, role, err_body)
         else:
             logger.error(
-                "OpenRouter HTTP error %d for %s: %s; falling back to deterministic provider",
+                "%s HTTP error %d for %s: %s; falling back to deterministic provider",
+                provider_name,
                 exc.response.status_code,
                 role,
                 err_body,
@@ -69,7 +72,8 @@ async def complete_demo(
         last_error_msg = f"HTTP {exc.response.status_code}: {err_body}"
     except Exception as exc:
         logger.error(
-            "OpenRouter inference failed for %s (%s: %s); falling back to deterministic provider",
+            "%s inference failed for %s (%s: %s); falling back to deterministic provider",
+            provider_name,
             role,
             type(exc).__name__,
             exc,
@@ -77,7 +81,7 @@ async def complete_demo(
         last_error_msg = f"{type(exc).__name__}: {exc}"
 
     # Fallback to deterministic provider
-    logger.warning("Using deterministic fallback provider for %s after OpenRouter failure", role)
+    logger.warning("Using deterministic fallback provider for %s after %s failure", role, provider_name)
     fallback = FallbackProvider()
     response = await fallback.complete(
         messages,
@@ -87,7 +91,7 @@ async def complete_demo(
         json_mode=response_schema is not None,
     )
     if isinstance(response.raw, dict):
-        response.raw["openrouter_error"] = last_error_msg
+        response.raw["provider_error"] = last_error_msg
     return response, True
 
 
@@ -96,14 +100,35 @@ def get_demo_provider_registry() -> ProviderRegistry:
     Get a provider registry configured for demo mode.
 
     In demo mode:
-    - Use OpenRouter if API key is configured
-    - Fall back to deterministic responses if no key or on error
+    - Use Groq if API key is configured (preferred - faster, free tier)
+    - Fall back to OpenRouter if Groq key not configured
+    - Fall back to deterministic responses if no keys or on error
     - Never use Claude in demo mode
     """
     registry = ProviderRegistry()
 
-    # Register OpenRouter provider
-    if settings.openrouter_api_key:
+    # Prefer Groq if API key is configured
+    if settings.groq_api_key:
+        groq = GroqProvider(api_key=settings.groq_api_key)
+        registry.register(groq)
+
+        # Set model slots
+        registry.set_slot(
+            ModelSlot(
+                role="classification",
+                provider="groq",
+                model=settings.groq_model,
+            )
+        )
+        registry.set_slot(
+            ModelSlot(
+                role="drafting",
+                provider="groq",
+                model=settings.groq_model,
+            )
+        )
+    # Fall back to OpenRouter if Groq not configured
+    elif settings.openrouter_api_key:
         openrouter = OpenRouterProvider(api_key=settings.openrouter_api_key)
         registry.register(openrouter)
 
@@ -123,7 +148,7 @@ def get_demo_provider_registry() -> ProviderRegistry:
             )
         )
     else:
-        # Use fallback provider when no OpenRouter key
+        # Use fallback provider when no API keys configured
         fallback = FallbackProvider()
         registry.register(fallback)
 

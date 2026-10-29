@@ -534,9 +534,18 @@ async function openEmail(emailId) {
           }
           const draftData = await draftRes.json();
           const replyBody = typeof draftData.content === "string" ? draftData.content.trim() : "";
-          if (!replyBody || draftData.fallback) {
+          if (!replyBody) {
             throw new Error("The AI provider did not return a usable reply. No draft was saved.");
           }
+
+          // Show fallback warning banner if applicable
+          if (draftData.fallback) {
+            const warningBanner = document.createElement("div");
+            warningBanner.style.cssText = "background: #fff3cd; border: 1px solid #ffc107; color: #856404; padding: 12px; margin-bottom: 12px; border-radius: 4px; font-size: 14px; display: flex; align-items: center; gap: 8px;";
+            warningBanner.innerHTML = "⚠ <strong>Draft from contextual fallback</strong> — OpenRouter quota exceeded. This is a template, not a live AI response.";
+            draftArea.prepend(warningBanner);
+          }
+
           draftMeta.textContent = `AI-generated · ${draftData.provider} (${draftData.model})`;
           draftContent.textContent = replyBody;
           draftArea.style.display = "block";

@@ -759,13 +759,12 @@ async def generate_demo_draft(
             response_schema=reply_schema,
         )
 
-        # Check if fallback was used - reject the draft if so
-        if used_fallback or response.raw.get("is_fallback", False):
+        # Check if fallback was used — save the draft but clearly label it as a quota-limited fallback
+        is_fallback = used_fallback or response.raw.get("is_fallback", False)
+        if is_fallback:
             or_err = response.raw.get("openrouter_error", "")
-            logger.error("Draft generation used deterministic fallback; rejecting draft. OpenRouter error: %s", or_err)
-            raise HTTPException(
-                status_code=503,
-                detail=f"Draft generation failed: AI provider unavailable (error: {or_err or 'rate limited or not configured'}). Drafts are only saved when AI generation succeeds."
+            logger.warning(
+                "Draft generation used contextual fallback (AI quota exceeded). OpenRouter error: %s", or_err
             )
 
         # Structured response must contain a non-empty reply body. Never store
@@ -802,12 +801,17 @@ async def generate_demo_draft(
                 content=draft_content,
             )
             draft_id = await db.save_draft(draft)
+        provider_label = (
+            "contextual-fallback (OpenRouter quota exceeded — live AI unavailable)"
+            if is_fallback
+            else response.provider
+        )
         return {
             "draft_id": draft_id,
             "content": draft_content,
-            "provider": response.provider,
-            "model": response.model,
-            "fallback": used_fallback,
+            "provider": provider_label,
+            "model": "fallback-contextual" if is_fallback else response.model,
+            "fallback": is_fallback,
             "note": "Draft generated. Sending requires owner approval.",
         }
     finally:

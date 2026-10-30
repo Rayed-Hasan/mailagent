@@ -95,14 +95,13 @@ async def landing_video_poster():
 db = Database(force_demo_mode=settings.public_demo_mode)
 local_queue: Optional[LocalTaskQueue] = None
 mailbox_processing_lock = asyncio.Lock()
+demo_sync_lock = asyncio.Lock()
 demo_sends_in_flight: set[str] = set()
 
 
 async def process_owner_mailboxes() -> None:
-    """Process owner-authorized mailboxes on the local queue."""
+    """Continuously sync the demo inbox, then process mail when auto-reply is on."""
     if settings.public_demo_mode:
-        if not settings.demo_allow_public_send:
-            return
         user_id = get_demo_user_id()
     else:
         user_id = settings.dashboard_user_id.strip()
@@ -110,9 +109,24 @@ async def process_owner_mailboxes() -> None:
         return
 
     async with mailbox_processing_lock:
-        if not await db.get_auto_reply_enabled(user_id):
-            return
         if settings.public_demo_mode:
+            if demo_gmail_provider and demo_mailbox_status.get("connected"):
+                try:
+                    async with demo_sync_lock:
+                        if demo_sync_service:
+                            stats = await demo_sync_service.sync_mailbox(
+                                account_id=get_demo_account_id(),
+                                provider=demo_gmail_provider,
+                                limit=50,
+                            )
+                            demo_mailbox_status["last_sync"] = stats.get("synced_at")
+                            demo_mailbox_status["last_error"] = stats.get("error_message")
+                            demo_mailbox_status["message_count"] = stats.get("new", 0)
+                except Exception:
+                    logger.exception("Automatic Gmail synchronization failed")
+                    demo_mailbox_status["last_error"] = "Automatic Gmail synchronization failed"
+            if not settings.demo_allow_public_send or not await db.get_auto_reply_enabled(user_id):
+                return
             # Scheduled sends live in SQLite so a process restart during the
             # undo window does not silently lose the reply.
             account_id = get_demo_account_id()
@@ -314,10 +328,7 @@ async def initialize_database() -> None:
         # from fabricating real mailbox contents. Seeding is only permitted via explicit test setup.
         logger.info("Production demo started without synthetic auto-seeding.")
 
-    automation_user_configured = (
-        settings.dashboard_user_id.strip()
-        and (not settings.public_demo_mode or settings.demo_allow_public_send)
-    )
+    automation_user_configured = settings.dashboard_user_id.strip()
     if settings.task_queue_backend == "local" and automation_user_configured:
         local_queue = LocalTaskQueue(
             db_path=settings.local_queue_db_path,
@@ -1388,12 +1399,16 @@ async def trigger_demo_sync(
             from mailagent.mail.sync_service import GmailSyncService
             demo_sync_service = GmailSyncService(db)
 
-        stats = await demo_sync_service.sync_mailbox(
-            account_id=account_id,
-            provider=demo_gmail_provider,
-            limit=50,
-        )
+        async with demo_sync_lock:
+            stats = await demo_sync_service.sync_mailbox(
+                account_id=account_id,
+                provider=demo_gmail_provider,
+                limit=50,
+            )
         demo_mailbox_status["last_sync"] = stats.get("synced_at")
+        demo_mailbox_status["last_error"] = stats.get("error_message")
+        if stats.get("error_message"):
+            return {"synced": False, "message": stats["error_message"], "stats": stats, "account_id": account_id}
         return {
             "synced": True,
             "stats": stats,

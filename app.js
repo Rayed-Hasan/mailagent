@@ -23,7 +23,8 @@ const inboxState = {
   isDemoMode: false, 
   allEmails: [],
   activeNav: "inbox",
-  tokensUsed: 0
+  tokensUsed: 0,
+  demoMessageCount: null
 };
 
 function addTokenUsage(tokens) {
@@ -59,6 +60,7 @@ async function checkDemoMode() {
       if (data.demo_mode) {
         inboxState.isDemoMode = true;
         inboxState.accountId = data.demo_account_id;
+        inboxState.demoMessageCount = data.message_count;
 
         if (data.gmail_connected) {
           const email = data.demo_account_email || "dedicated Gmail";
@@ -614,7 +616,7 @@ function showToast(message) {
 }
 
 async function refreshNotifications(initial = false) {
-  if (!apiConfig.token || inboxState.isDemoMode) return;
+  if (!apiConfig.token) return;
   try {
     const response = await fetch(`${apiConfig.baseUrl}/api/audit-log?limit=50`, {
       headers: { Authorization: `Bearer ${apiConfig.token}` },
@@ -921,6 +923,28 @@ window.addEventListener("hashchange", () => handleNavigation(window.location.has
     });
     await fetchInbox();
     await updateSidebarFromApi();
+    if (apiConfig.token) {
+      await refreshNotifications(true);
+      window.setInterval(() => refreshNotifications(false), 15000);
+    }
+    // The server syncs the mailbox in the background. Refresh the visible inbox
+    // automatically so newly ingested mail appears without a manual sync click.
+    window.setInterval(async () => {
+      if (document.hidden || inboxState.loading) return;
+      try {
+        const response = await fetch(`${apiConfig.baseUrl}/api/demo/status`);
+        if (!response.ok) return;
+        const status = await response.json();
+        if (status.message_count !== inboxState.demoMessageCount) {
+          inboxState.demoMessageCount = status.message_count;
+          inboxState.offset = 0;
+          await fetchInbox();
+          await updateSidebarFromApi();
+        }
+      } catch (_error) {
+        // Keep the current inbox visible while the service is temporarily offline.
+      }
+    }, 30000);
   } else if (apiConfig.baseUrl && apiConfig.token) {
     await fetchInbox();
     await refreshNotifications(true);

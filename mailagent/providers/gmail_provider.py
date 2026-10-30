@@ -138,7 +138,11 @@ class GmailProvider(EmailProviderInterface):
                     continue
 
         except HttpError as exc:
-            logger.warning("Gmail message list request failed (%s)", type(exc).__name__)
+            logger.warning(
+                "Gmail message list request failed (HTTP %s)",
+                getattr(getattr(exc, "resp", None), "status", "unknown"),
+            )
+            raise RuntimeError("Unable to list messages from Gmail") from exc
 
         return messages
 

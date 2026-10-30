@@ -373,8 +373,9 @@ class SQLiteStorage(StorageInterface):
 
             # Sort
             if sort_by == "priority":
-                query += " ORDER BY c.priority_score DESC NULLS LAST"
-            query += ", e.received_at DESC, e.id DESC"
+                query += " ORDER BY c.priority_score DESC NULLS LAST, e.received_at DESC, e.id DESC"
+            else:
+                query += " ORDER BY e.received_at DESC, e.id DESC"
 
             # Paginate
             query += " LIMIT ? OFFSET ?"

@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 import asyncio
-import secrets
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
@@ -187,17 +186,6 @@ def _schedule_demo_send(draft_id: str, email_id: str, delay_seconds: Optional[in
             demo_sends_in_flight.discard(draft_id)
 
     asyncio.create_task(dispatch())
-
-
-def _is_dashboard_owner_token(authorization: Optional[str]) -> bool:
-    scheme, _, token = (authorization or "").partition(" ")
-    expected = settings.dashboard_api_token
-    return bool(
-        expected
-        and scheme.lower() == "bearer"
-        and token
-        and secrets.compare_digest(token, expected)
-    )
 
 
 async def _send_demo_draft_after_delay(draft_id: str, email_id: str, delay_seconds: Optional[int] = None) -> None:
@@ -888,7 +876,6 @@ async def generate_demo_draft(
     http_request: Request,
     draft_request: DemoDraftRequest,
     user_id: str = Depends(demo_mode_auth_dependency),
-    authorization: Optional[str] = Header(default=None),
 ):
     """Generate a draft for synthetic mail using optional OpenRouter inference."""
     if not settings.public_demo_mode:
@@ -1008,11 +995,14 @@ async def generate_demo_draft(
 
         owner_auto_send = (
             settings.demo_allow_public_send
-            and _is_dashboard_owner_token(authorization)
             and await db.get_auto_reply_enabled(get_demo_user_id())
         )
         send_scheduled = False
-        send_note = "Draft generated. Sending requires owner approval."
+        send_note = (
+            "Auto mode is on. Checking safety and send policy..."
+            if owner_auto_send
+            else "Draft generated. Automatic replies are currently off; this draft needs review."
+        )
         if owner_auto_send:
             email_action = EmailAction(classification["action"])
             email_category = EmailCategory(classification["category"])

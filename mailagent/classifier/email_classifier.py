@@ -183,7 +183,7 @@ Action Determination:
 - reply: Email asks a question or requests a response
 - draft_only: Email may warrant a reply but should be reviewed first
 - archive: No action needed, can be archived
-- flag_human: Requires human review (sensitive, urgent, or ambiguous)
+- flag_human: Requires human review (sensitive, emergency, or ambiguous). Do not choose this action only because the sender says the message is urgent; routine urgent requests can be auto-replied when policy checks pass.
 
 Email Details:
 From: {email.sender}

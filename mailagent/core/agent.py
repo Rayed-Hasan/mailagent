@@ -195,11 +195,39 @@ class EmailAgent:
 
         existing_email = await self.db.get_email_by_message_id(account_id, email.message_id)
         email_id = existing_email["id"] if existing_email else await self.db.save_email(email, account_id)
+        existing_classification = await self.db.get_classification(email_id) if existing_email else None
         if existing_email:
             audit_entries = await self.db.get_audit_log(email_id)
-            if any(entry.get("event_type") in {"automation_processed", "reply_sent"} for entry in audit_entries):
+            if any(entry.get("event_type") == "reply_sent" for entry in audit_entries):
                 return
-        existing_classification = await self.db.get_classification(email_id) if existing_email else None
+            processed_entries = [
+                entry for entry in audit_entries
+                if entry.get("event_type") == "automation_processed"
+            ]
+            retry_urgent_hold = False
+            if (
+                processed_entries
+                and existing_classification
+                and existing_classification.get("category") == EmailCategory.URGENT.value
+                and any(entry.get("reason") == "Contains emotional content requiring human review" for entry in processed_entries)
+            ):
+                sender_history = await provider.fetch_sender_history(email.sender_email)
+                still_requires_review, _ = self.safety_rules.should_flag_for_human(
+                    email, EmailCategory(existing_classification["category"]), sender_history
+                )
+                retry_urgent_hold = not still_requires_review
+            if processed_entries and not retry_urgent_hold:
+                return
+            if retry_urgent_hold:
+                # Replace the old review-only draft with the current policy result.
+                for pending_draft in await self.db.get_pending_drafts(account_id):
+                    if pending_draft.get("email_id") == email_id:
+                        await self.db.update_draft_status(pending_draft["id"], DraftStatus.CANCELLED)
+                await self.db.log_audit({
+                    "email_id": email_id,
+                    "event_type": "automation_retry",
+                    "reason": "Rechecking an urgent message after the safe-auto-reply policy changed",
+                })
 
         # Prefilter: check for bulk/newsletter/important messages
         # Convert EmailMessage to MailMessage for prefilter

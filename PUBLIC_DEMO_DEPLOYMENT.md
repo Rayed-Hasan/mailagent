@@ -98,10 +98,11 @@ startup. The owner can still turn them off in the app with the
 `DASHBOARD_API_TOKEN`. The background worker checks Gmail every minute, drafts
 and sends eligible Inbox messages after the configured undo delay, and syncs
 Spam and archived messages into the dashboard for visibility. It never replies
-to messages classified as spam. Sensitive or urgent messages, automated mail,
-low-confidence classifications, rate limits, and the kill switch can still hold
-a reply for review. First-time senders are eligible in this dedicated demo
-mailbox when the explicit flag above is enabled.
+to messages classified as spam. Sensitive or emergency messages, automated
+mail, low-confidence classifications, rate limits, and the kill switch can
+still hold a reply for review. Routine urgent requests can be auto-replied when
+the normal policy checks pass. First-time senders are eligible in this dedicated
+demo mailbox when the explicit flag above is enabled.
 
 ---
 

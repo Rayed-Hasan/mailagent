@@ -97,8 +97,8 @@ class SafetyRules:
         """Check if email contains emotional content"""
         emotional_indicators = [
             "upset", "angry", "frustrated", "disappointed", "worried",
-            "concerned", "complaint", "harassment", "threat", "urgent",
-            "emergency", "please help", "asap", "immediately"
+            "concerned", "complaint", "harassment", "threat",
+            "emergency", "please help"
         ]
 
         text = (email.subject + " " + email.body).lower()

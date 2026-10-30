@@ -24,7 +24,8 @@ const inboxState = {
   allEmails: [],
   activeNav: "inbox",
   tokensUsed: 0,
-  demoMessageCount: null
+  demoMessageCount: null,
+  autoReplyEnabled: false
 };
 
 function addTokenUsage(tokens) {
@@ -46,6 +47,18 @@ function setConnectionStatus(message, connected = false) {
   connectionStatus.classList.toggle("connected", connected);
 }
 
+function updateAutonomyIndicator(enabled) {
+  inboxState.autoReplyEnabled = Boolean(enabled);
+  const button = document.querySelector("#modeButton");
+  if (!button) return;
+  const dot = button.querySelector("span");
+  button.replaceChildren(dot, document.createTextNode(enabled ? "Auto reply on" : "Approve mode"));
+  button.title = enabled
+    ? "Automatic replies are enabled for eligible new mail. Safety checks and the undo delay still apply."
+    : "Replies remain drafts until approved.";
+  button.dataset.enabled = String(Boolean(enabled));
+}
+
 async function checkDemoMode() {
   // Check if we're in demo mode by querying the demo status endpoint
   if (!apiConfig.baseUrl) {
@@ -61,6 +74,7 @@ async function checkDemoMode() {
         inboxState.isDemoMode = true;
         inboxState.accountId = data.demo_account_id;
         inboxState.demoMessageCount = data.message_count;
+        updateAutonomyIndicator(data.automatic_replies_enabled);
 
         if (data.gmail_connected) {
           const email = data.demo_account_email || "dedicated Gmail";
@@ -455,8 +469,8 @@ async function fetchInbox(append = false) {
   }
   if (inboxState.activeNav === "sent") {
     loadMoreButton.hidden = true;
-    setConnectionStatus("Sent Messages · Protected", true);
-    setMailListState("Outbound sending is disabled in public demo mode. Sent folder is read-only.");
+    setConnectionStatus("Sent replies · Demo", true);
+    setMailListState("Automatic replies are sent by the background agent. Gmail's Sent folder is not exposed in this public demo.");
     return true;
   }
   if (inboxState.activeNav === "archive") {
@@ -720,7 +734,11 @@ document.querySelector("#reviewButton").addEventListener("click", async () => {
 });
 
 document.querySelector("#openBrief").addEventListener("click", () => showToast("Open an email to review its classification and labels."));
-document.querySelector("#modeButton").addEventListener("click", () => showToast("Approve mode is on — nothing sends without your check."));
+document.querySelector("#modeButton").addEventListener("click", () => showToast(
+  inboxState.autoReplyEnabled
+    ? "Automatic replies are on. Eligible mail is sent after policy checks and the undo delay."
+    : "Approve mode is on. Replies stay as drafts until approved."
+));
 // Sidebar navigation routing
 function handleNavigation(hash) {
   const cleanHash = (hash || window.location.hash || "#inbox").replace(/^#/, "");
@@ -936,6 +954,7 @@ window.addEventListener("hashchange", () => handleNavigation(window.location.has
         const response = await fetch(`${apiConfig.baseUrl}/api/demo/status`);
         if (!response.ok) return;
         const status = await response.json();
+        updateAutonomyIndicator(status.automatic_replies_enabled);
         if (status.message_count !== inboxState.demoMessageCount) {
           inboxState.demoMessageCount = status.message_count;
           inboxState.offset = 0;

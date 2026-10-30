@@ -53,7 +53,7 @@ class LocalTaskQueue:
     ) -> bool:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
-        if self.kill_switch_checker is not None:
+        if self.kill_switch_checker is not None and not asyncio.iscoroutinefunction(self.kill_switch_checker):
             active = self.kill_switch_checker()
             if not asyncio.iscoroutine(active) and active:
                 logger.warning("Refusing to schedule task while kill switch is active")

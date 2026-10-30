@@ -33,7 +33,7 @@ class GmailSyncService:
         account_id: str,
         provider: GmailProvider,
         limit: int = 50,
-        folder: str = "INBOX",
+        folder: str = "ANYWHERE",
         since: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """

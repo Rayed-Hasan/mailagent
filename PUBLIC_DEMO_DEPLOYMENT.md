@@ -88,15 +88,20 @@ DEMO_MAX_CONCURRENT_REQUESTS=5
 # Enables owner-authenticated auto replies only. The public /api/demo/send
 # endpoint remains disabled for anonymous visitors.
 DEMO_ALLOW_PUBLIC_SEND=true
+DEMO_AUTO_REPLY_ENABLED=true
+DEMO_ALLOW_FIRST_TIME_SENDER_AUTO_REPLY=true
 DEMO_RESET_ENDPOINT_ENABLED=false
 ```
 
-Automatic replies are off until the mailbox owner enables **Enable fully
-automatic replies** in the app using the `DASHBOARD_API_TOKEN`. Once enabled,
-the background worker checks the connected demo mailbox every minute, generates
-replies for eligible new mail, and sends them after the configured undo delay.
-Safety rules, rate limits, and the kill switch can still hold a reply for review.
-Urgent and sensitive messages are flagged instead of auto-replied to.
+For the hackathon mailbox, the Render profile enables automatic replies on
+startup. The owner can still turn them off in the app with the
+`DASHBOARD_API_TOKEN`. The background worker checks Gmail every minute, drafts
+and sends eligible Inbox messages after the configured undo delay, and syncs
+Spam and archived messages into the dashboard for visibility. It never replies
+to messages classified as spam. Sensitive or urgent messages, automated mail,
+low-confidence classifications, rate limits, and the kill switch can still hold
+a reply for review. First-time senders are eligible in this dedicated demo
+mailbox when the explicit flag above is enabled.
 
 ---
 

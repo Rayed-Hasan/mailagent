@@ -64,7 +64,8 @@ async function checkDemoMode() {
 
         if (data.gmail_connected) {
           const email = data.demo_account_email || "dedicated Gmail";
-          setConnectionStatus(`Connected · ${email} (Real Gmail)`, true);
+          const automation = data.automatic_replies_enabled ? " · Auto replies on" : " · Auto-sync on";
+          setConnectionStatus(`Connected · ${email} (Real Gmail)${automation}`, true);
         } else {
           setConnectionStatus("Gmail disconnected · Owner authorization pending", false);
         }

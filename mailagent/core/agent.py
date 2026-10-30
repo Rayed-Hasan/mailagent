@@ -47,9 +47,19 @@ class EmailAgent:
         self.classifier = EmailClassifier(provider_registry=self.provider_registry)
         self.voice_learner = VoiceProfileLearner()
         self.draft_generator = DraftGenerator(provider_registry=self.provider_registry)
-        self.worth_sending_policy = WorthSendingPolicy()
+        self.worth_sending_policy = WorthSendingPolicy(
+            allow_first_time_senders=(
+                settings.public_demo_mode
+                and settings.demo_allow_first_time_sender_auto_reply
+            )
+        )
         self.send_flow = SendFlow(self.autonomy_mode, db=self.db)
-        self.safety_rules = SafetyRules()
+        self.safety_rules = SafetyRules(
+            allow_first_time_senders=(
+                settings.public_demo_mode
+                and settings.demo_allow_first_time_sender_auto_reply
+            )
+        )
         self.rate_limiter = RateLimiter()
         self.label_mapper = LabelMapper()
 

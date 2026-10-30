@@ -107,7 +107,12 @@ class GmailProvider(EmailProviderInterface):
 
         try:
             # Build search query
-            query = f"in:{folder.lower()}"
+            if folder.lower() in {"anywhere", "all", "all-mail"}:
+                # Pull Inbox, archived, and spam mail for the demo inbox view.
+                # Keep sent mail, drafts, and trash out of the incoming queue.
+                query = "in:anywhere -in:sent -in:drafts -in:trash"
+            else:
+                query = f"in:{folder.lower()}"
             if since:
                 date_str = since.strftime("%Y/%m/%d")
                 query += f" after:{date_str}"
@@ -378,6 +383,7 @@ class GmailProvider(EmailProviderInterface):
         try:
             payload = msg['payload']
             headers = {h['name']: h['value'] for h in payload.get('headers', [])}
+            headers["X-MailAgent-Gmail-Label-Ids"] = " ".join(msg.get("labelIds", []))
 
             # Extract basic info
             message_id = msg['id']

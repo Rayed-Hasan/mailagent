@@ -442,6 +442,21 @@ class Database:
         )
         return bool(result.data and result.data[0].get("auto_reply_enabled"))
 
+    async def get_auto_reply_setting(self, user_id: str) -> Optional[bool]:
+        """Return the saved value, or None when the user has never configured it."""
+        if self.storage:
+            return await self.storage.get_auto_reply_setting(user_id)
+        result = (
+            self.client.table("automation_settings")
+            .select("auto_reply_enabled")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            return None
+        return bool(result.data[0].get("auto_reply_enabled"))
+
     async def get_auto_reply_updated_at(self, user_id: str) -> Optional[str]:
         if self.storage:
             return await self.storage.get_auto_reply_updated_at(user_id)

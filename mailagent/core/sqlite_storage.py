@@ -672,6 +672,15 @@ class SQLiteStorage(StorageInterface):
             row = await cursor.fetchone()
             return bool(row[0]) if row else False
 
+    async def get_auto_reply_setting(self, user_id: str) -> Optional[bool]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT auto_reply_enabled FROM automation_settings WHERE user_id = ?",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            return bool(row[0]) if row else None
+
     async def get_auto_reply_updated_at(self, user_id: str) -> Optional[str]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(

@@ -29,8 +29,9 @@ class WorthSendingPolicy:
     # First-time sender detection window (days)
     FIRST_TIME_SENDER_WINDOW = 30
 
-    def __init__(self, confidence_threshold: float = None):
+    def __init__(self, confidence_threshold: float = None, allow_first_time_senders: bool = False):
         self.confidence_threshold = confidence_threshold or settings.confidence_threshold
+        self.allow_first_time_senders = allow_first_time_senders
 
     async def should_send_reply(
         self,
@@ -50,6 +51,12 @@ class WorthSendingPolicy:
         # Check 1: Must be from a real person or service that expects a reply
         if not self._is_from_real_person(email):
             return False, "Not from a real person or service expecting reply"
+
+        # Spam may be shown in the demo inbox for diagnosis, but must never
+        # trigger an automatic response.
+        gmail_labels = email.raw_headers.get("X-MailAgent-Gmail-Label-Ids", "")
+        if classification == EmailCategory.SPAM or "SPAM" in gmail_labels.split():
+            return False, "Spam messages are never auto-replied to"
 
         # Check 2: Must ask a question, request action, or need confirmation
         if not self._requires_response(email):
@@ -75,7 +82,7 @@ class WorthSendingPolicy:
             return False, "Contains sensitive topic requiring human review"
 
         # Check 8: First-time sender check
-        if self._is_first_time_sender(email, sender_history):
+        if not self.allow_first_time_senders and self._is_first_time_sender(email, sender_history):
             return False, "First-time sender requires human review"
 
         # Check 9: Rate limiting

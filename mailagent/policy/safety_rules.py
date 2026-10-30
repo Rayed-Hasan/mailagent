@@ -27,8 +27,8 @@ class SafetyRules:
     # First-time sender threshold (days)
     FIRST_TIME_SENDER_DAYS = 30
 
-    def __init__(self):
-        pass
+    def __init__(self, allow_first_time_senders: bool = False):
+        self.allow_first_time_senders = allow_first_time_senders
 
     def should_flag_for_human(
         self,
@@ -43,12 +43,16 @@ class SafetyRules:
             (should_flag, reason)
         """
 
+        gmail_labels = email.raw_headers.get("X-MailAgent-Gmail-Label-Ids", "")
+        if "SPAM" in gmail_labels.split():
+            return True, "Gmail marked this message as spam"
+
         # Check 1: Sensitive topics
         if self._contains_sensitive_topic(email):
             return True, "Contains sensitive topic requiring human review"
 
         # Check 2: First-time sender
-        if self._is_first_time_sender(email, sender_history):
+        if not self.allow_first_time_senders and self._is_first_time_sender(email, sender_history):
             return True, "First-time sender requires human review"
 
         # Check 3: Already classified as sensitive

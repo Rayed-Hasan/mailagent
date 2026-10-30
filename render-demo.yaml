@@ -14,6 +14,10 @@ services:
       # Owner-authenticated automation only; anonymous demo send endpoints remain disabled.
       - key: DEMO_ALLOW_PUBLIC_SEND
         value: "true"
+      - key: DEMO_AUTO_REPLY_ENABLED
+        value: "true"
+      - key: DEMO_ALLOW_FIRST_TIME_SENDER_AUTO_REPLY
+        value: "true"
       - key: ENVIRONMENT
         value: production
       - key: OPENROUTER_API_KEY

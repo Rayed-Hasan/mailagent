@@ -167,8 +167,12 @@ demo_mailbox_status: Dict[str, Any] = {
     "message_count": 0,
 }
 demo_send_rate_limiter = RateLimiter()
-demo_send_safety_rules = SafetyRules()
-demo_worth_sending_policy = WorthSendingPolicy()
+demo_send_safety_rules = SafetyRules(
+    allow_first_time_senders=settings.demo_allow_first_time_sender_auto_reply
+)
+demo_worth_sending_policy = WorthSendingPolicy(
+    allow_first_time_senders=settings.demo_allow_first_time_sender_auto_reply
+)
 
 
 def _schedule_demo_send(draft_id: str, email_id: str, delay_seconds: Optional[int] = None) -> None:
@@ -258,6 +262,13 @@ async def _send_demo_draft_after_delay(draft_id: str, email_id: str, delay_secon
 async def initialize_database() -> None:
     global demo_gmail_provider, demo_sync_service, demo_mailbox_status, local_queue
     await db.initialize()
+
+    # The Render demo uses ephemeral SQLite. Restore the hackathon's explicit
+    # auto-reply default after restarts, while preserving a saved owner choice.
+    if settings.public_demo_mode and settings.demo_auto_reply_enabled:
+        configured = await db.get_auto_reply_setting(get_demo_user_id())
+        if configured is None:
+            await db.set_auto_reply_enabled(get_demo_user_id(), True)
 
     # In public demo mode, check for owner-configured real Gmail mailbox
     if settings.public_demo_mode:
@@ -1365,7 +1376,12 @@ async def get_demo_status(
                 else "fallback-deterministic"
             ),
             "can_public_send": False,
-            "note": "Messages in the public demo are retrieved from the dedicated demo mailbox."
+            "automatic_replies_enabled": (
+                settings.demo_allow_public_send
+                and await db.get_auto_reply_enabled(get_demo_user_id())
+            ),
+            "note": "Messages in the public demo are retrieved from the dedicated demo mailbox.",
+            "sync_scope": "Inbox, archived mail, and spam (sent, drafts, and trash excluded).",
         }
     finally:
         pass  # Rate limiting is handled by demo_mode_auth_dependency

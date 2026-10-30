@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     demo_gmail_redirect_uri: str = ""
     demo_gmail_email: str = ""
     demo_allow_public_send: bool = False
+    demo_auto_reply_enabled: bool = False
+    demo_allow_first_time_sender_auto_reply: bool = False
 
     @model_validator(mode="after")
     def validate_production_configuration(self) -> "Settings":

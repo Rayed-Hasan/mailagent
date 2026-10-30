@@ -153,12 +153,26 @@ class EmailAgent:
             print(f"No provider found for account {account_id}")
             return
 
-        # Fetch new emails
-        emails = await provider.fetch_emails(limit=100)
+        since = None
+        if self.autonomy_mode == AutonomyMode.AUTO_FULL:
+            enabled_at = await self.db.get_auto_reply_updated_at(self.user_id)
+            if not enabled_at:
+                return
+            try:
+                since = datetime.fromisoformat(enabled_at.replace("Z", "+00:00"))
+            except ValueError:
+                logger.warning("Invalid automatic-reply activation time; skipping mailbox processing")
+                return
+
+        # Query from the time the owner enabled automation, then filter again
+        # to avoid the Gmail API's day-granularity `after:` query replaying old mail.
+        emails = await provider.fetch_emails(since=since, limit=100)
 
         print(f"Found {len(emails)} new emails")
 
         for email in emails:
+            if since and email.received_at < since:
+                continue
             await self.process_email(email, account_id, provider)
 
     async def process_email(
@@ -166,11 +180,16 @@ class EmailAgent:
         email: EmailMessage,
         account_id: str,
         provider: EmailProviderInterface
-    ):
+    ) -> Optional[bool]:
         """Process a single email through the pipeline"""
 
-        # Save email to database
-        email_id = await self.db.save_email(email, account_id)
+        existing_email = await self.db.get_email_by_message_id(account_id, email.message_id)
+        email_id = existing_email["id"] if existing_email else await self.db.save_email(email, account_id)
+        if existing_email:
+            audit_entries = await self.db.get_audit_log(email_id)
+            if any(entry.get("event_type") in {"automation_processed", "reply_sent"} for entry in audit_entries):
+                return
+        existing_classification = await self.db.get_classification(email_id) if existing_email else None
 
         # Prefilter: check for bulk/newsletter/important messages
         # Convert EmailMessage to MailMessage for prefilter
@@ -204,20 +223,30 @@ class EmailAgent:
 
         # If prefilter marked as important, skip model but preserve for review
         # If prefilter marked as bulk, use deterministic classification
-        if prefilter_result.skip_model and not prefilter_result.is_important:
+        thread = await provider.fetch_thread(email.thread_id) if email.thread_id else []
+        sender_history = await provider.fetch_sender_history(email.sender_email)
+
+        if existing_classification:
+            classification = ClassificationResult(
+                email_id=email_id,
+                category=EmailCategory(existing_classification["category"]),
+                priority_score=existing_classification["priority_score"],
+                action=EmailAction(existing_classification["action"]),
+                confidence=existing_classification["confidence"],
+                reason=existing_classification["reason"],
+            )
+            classification_id = existing_classification["id"]
+        elif prefilter_result.skip_model and not prefilter_result.is_important:
             # Use deterministic classification based on prefilter category
             classification = self._deterministic_classification(
                 email_id, prefilter_result.category, prefilter_result.reason
             )
+            classification_id = await self.db.save_classification(classification)
         else:
             # Fetch thread and sender history for classification
-            thread = await provider.fetch_thread(email.thread_id) if email.thread_id else []
-            sender_history = await provider.fetch_sender_history(email.sender_email)
-
             # Classify email using LLM
             classification = await self.classifier.classify(email, thread, sender_history)
-
-        classification_id = await self.db.save_classification(classification)
+            classification_id = await self.db.save_classification(classification)
 
         # Log classification
         await self.db.log_audit({
@@ -257,19 +286,31 @@ class EmailAgent:
         if classification.action == EmailAction.ARCHIVE:
             await provider.archive(email.message_id)
             print(f"Archived: {email.subject}")
+            await self._mark_automation_processed(email_id, classification_id, "Archived by classification policy")
             return
 
         if classification.action == EmailAction.FLAG_HUMAN:
             await provider.apply_label(email.message_id, "Review Required")
             print(f"Flagged for human: {email.subject}")
+            await self._mark_automation_processed(email_id, classification_id, classification.reason)
             return
 
         # If reply or draft only, generate draft
         if classification.action in [EmailAction.REPLY, EmailAction.DRAFT_ONLY]:
-            await self._generate_and_handle_draft(
+            handled = await self._generate_and_handle_draft(
                 email, classification, email_id, classification_id,
                 account_id, provider, thread, sender_history
             )
+            if handled:
+                await self._mark_automation_processed(email_id, classification_id, "Draft and send policy evaluated")
+
+    async def _mark_automation_processed(self, email_id: str, classification_id: str, reason: str) -> None:
+        await self.db.log_audit({
+            "email_id": email_id,
+            "classification_id": classification_id,
+            "event_type": "automation_processed",
+            "reason": reason,
+        })
 
     def _deterministic_classification(
         self, email_id: str, prefilter_category: str, reason: str
@@ -332,7 +373,7 @@ class EmailAgent:
         provider: EmailProviderInterface,
         thread: List[EmailMessage],
         sender_history: List[EmailMessage]
-    ):
+    ) -> bool:
         """Generate draft and handle based on autonomy mode"""
 
         # Get user guidelines (placeholder - would be stored in DB)
@@ -346,7 +387,7 @@ class EmailAgent:
             # Keep provider failures from becoming invalid Draft models or
             # entering the send flow. The email remains classified for retry.
             logger.warning("Draft generation failed; message remains classified without a draft")
-            return
+            return False
 
         # Create draft object
         draft = Draft(
@@ -365,7 +406,7 @@ class EmailAgent:
             draft.status = DraftStatus.PENDING
             draft_id = await self.db.save_draft(draft)
             print(f"Draft saved (not sending): {email.subject} - {policy_reason}")
-            return
+            return True
 
         # Check rate limit
         rate_limit_info = self.rate_limiter.check_rate_limit(account_id, email.thread_id)
@@ -375,7 +416,7 @@ class EmailAgent:
             draft.status = DraftStatus.PENDING
             draft_id = await self.db.save_draft(draft)
             print(f"Draft saved (rate limited): {email.subject} - {rate_limit_info.reason}")
-            return
+            return True
 
         # Process through send flow
         status, reason = await self.send_flow.process_draft(draft, classification.action)
@@ -397,10 +438,10 @@ class EmailAgent:
 
         # Send only after the configured delay and a final kill-switch check.
         if status == DraftStatus.APPROVED:
-            if settings.public_demo_mode or await self.db.is_kill_switch_active():
+            if (settings.public_demo_mode and not settings.demo_allow_public_send) or await self.db.is_kill_switch_active():
                 await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
-                logger.info("Automatic reply blocked by demo mode or kill switch")
-                return
+                logger.info("Automatic reply blocked by demo policy or kill switch")
+                return True
 
             try:
                 provider_draft_id = await provider.create_draft(
@@ -414,12 +455,12 @@ class EmailAgent:
             except Exception as exc:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
                 logger.warning("Provider draft creation failed (%s); reply remains pending", type(exc).__name__)
-                return
+                return True
 
             if not provider_draft_id:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
                 logger.warning("Email provider did not create a draft; reply remains pending")
-                return
+                return True
 
             try:
                 sent = await provider.send_reply(provider_draft_id)
@@ -430,7 +471,7 @@ class EmailAgent:
             if not sent:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
                 logger.warning("Provider did not confirm the send; reply remains pending")
-                return
+                return True
 
             await self.db.update_draft_status(draft_id, DraftStatus.SENT)
             self.rate_limiter.record_reply(account_id, email.thread_id)
@@ -449,6 +490,8 @@ class EmailAgent:
                 },
             })
             logger.info("Automatic reply sent for %s", email.subject)
+
+        return True
 
     async def learn_voice_profile(self, account_id: str):
         """Learn user's voice profile from sent emails"""

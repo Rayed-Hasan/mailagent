@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 import asyncio
+import secrets
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
@@ -18,10 +19,15 @@ import json
 logger = logging.getLogger("mailagent.dashboard")
 
 from mailagent.core.database import Database
-from mailagent.core.types import AutonomyMode, Draft, DraftStatus
+from mailagent.core.types import (
+    AutonomyMode, Draft, DraftStatus, EmailAction, EmailCategory, EmailMessage,
+)
 from mailagent.core.config import settings
 from mailagent.core.agent import EmailAgent
 from mailagent.core.local_queue import LocalTaskQueue
+from mailagent.policy.rate_limiter import RateLimiter
+from mailagent.policy.safety_rules import SafetyRules
+from mailagent.policy.worth_sending_policy import WorthSendingPolicy
 from mailagent.dashboard.auth import require_dashboard_auth
 from mailagent.dashboard.rate_limiter import demo_rate_limiter, get_client_ip
 from mailagent.demo.demo_seeder import DemoSeeder
@@ -89,15 +95,38 @@ async def landing_video_poster():
 db = Database(force_demo_mode=settings.public_demo_mode)
 local_queue: Optional[LocalTaskQueue] = None
 mailbox_processing_lock = asyncio.Lock()
+demo_sends_in_flight: set[str] = set()
 
 
 async def process_owner_mailboxes() -> None:
-    """Sync and process the configured owner's mailboxes on the local queue."""
-    user_id = settings.dashboard_user_id.strip()
-    if settings.public_demo_mode or not user_id or mailbox_processing_lock.locked():
+    """Process owner-authorized mailboxes on the local queue."""
+    if settings.public_demo_mode:
+        if not settings.demo_allow_public_send:
+            return
+        user_id = get_demo_user_id()
+    else:
+        user_id = settings.dashboard_user_id.strip()
+    if not user_id or mailbox_processing_lock.locked():
         return
 
     async with mailbox_processing_lock:
+        if not await db.get_auto_reply_enabled(user_id):
+            return
+        if settings.public_demo_mode:
+            # Scheduled sends live in SQLite so a process restart during the
+            # undo window does not silently lose the reply.
+            account_id = get_demo_account_id()
+            for pending_draft in await db.get_pending_drafts(account_id):
+                scheduled_at = pending_draft.get("scheduled_send_at")
+                if not scheduled_at or pending_draft["id"] in demo_sends_in_flight:
+                    continue
+                try:
+                    due = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+                except ValueError:
+                    logger.warning("Invalid scheduled send timestamp for draft %s", pending_draft["id"])
+                    continue
+                if due:
+                    _schedule_demo_send(pending_draft["id"], pending_draft["email_id"], delay_seconds=0)
         agent = EmailAgent(user_id)
         try:
             await agent.initialize()
@@ -123,6 +152,92 @@ demo_mailbox_status: Dict[str, Any] = {
     "last_error": None,
     "message_count": 0,
 }
+demo_send_rate_limiter = RateLimiter()
+demo_send_safety_rules = SafetyRules()
+demo_worth_sending_policy = WorthSendingPolicy()
+
+
+def _schedule_demo_send(draft_id: str, email_id: str, delay_seconds: Optional[int] = None) -> None:
+    if draft_id in demo_sends_in_flight:
+        return
+    demo_sends_in_flight.add(draft_id)
+
+    async def dispatch() -> None:
+        try:
+            await _send_demo_draft_after_delay(draft_id, email_id, delay_seconds)
+        finally:
+            demo_sends_in_flight.discard(draft_id)
+
+    asyncio.create_task(dispatch())
+
+
+def _is_dashboard_owner_token(authorization: Optional[str]) -> bool:
+    scheme, _, token = (authorization or "").partition(" ")
+    expected = settings.dashboard_api_token
+    return bool(
+        expected
+        and scheme.lower() == "bearer"
+        and token
+        and secrets.compare_digest(token, expected)
+    )
+
+
+async def _send_demo_draft_after_delay(draft_id: str, email_id: str, delay_seconds: Optional[int] = None) -> None:
+    """Dispatch an owner-authorized demo reply after the cancellable delay."""
+    await asyncio.sleep(max(0, settings.delay_send_seconds if delay_seconds is None else delay_seconds))
+    draft = await db.get_draft(draft_id)
+    if not draft or draft.get("status") != DraftStatus.PENDING.value:
+        return
+    if (
+        not settings.demo_allow_public_send
+        or not await db.get_auto_reply_enabled(get_demo_user_id())
+        or await db.is_kill_switch_active()
+    ):
+        await db.update_draft_status(draft_id, DraftStatus.CANCELLED)
+        return
+
+    email = await db.get_email(email_id)
+    if not email:
+        await db.update_draft_status(draft_id, DraftStatus.CANCELLED)
+        return
+    provider = demo_gmail_provider
+    if not provider or not demo_mailbox_status.get("connected"):
+        await db.update_draft_status(draft_id, DraftStatus.PENDING)
+        return
+
+    try:
+        provider_draft_id = await provider.create_draft(
+            to=email["sender_email"],
+            subject=f"Re: {email['subject']}",
+            body=draft["content"],
+        in_reply_to=(json.loads(email.get("raw_headers") or "{}").get("Message-ID") if isinstance(email.get("raw_headers"), str) else (email.get("raw_headers") or {}).get("Message-ID")),
+            thread_id=email.get("thread_id"),
+        )
+        if not provider_draft_id or not await provider.send_reply(provider_draft_id):
+            raise RuntimeError("Gmail did not confirm the send")
+    except Exception as exc:
+        await db.update_draft_status(draft_id, DraftStatus.PENDING)
+        logger.warning("Owner-authorized automatic send failed (%s)", type(exc).__name__)
+        await db.log_audit({
+            "email_id": email_id,
+            "draft_id": draft_id,
+            "event_type": "auto_send_failed",
+            "reason": "Provider did not confirm the scheduled send",
+        })
+        return
+
+    await db.update_draft_status(draft_id, DraftStatus.SENT)
+    demo_send_rate_limiter.record_reply(
+        email.get("account_id", get_demo_account_id()),
+        email.get("thread_id") or email_id,
+    )
+    await db.log_audit({
+        "email_id": email_id,
+        "draft_id": draft_id,
+        "event_type": "reply_sent",
+        "reason": "Owner-enabled automatic reply sent after policy checks and delay window",
+        "context": {"autonomy_mode": "auto_full"},
+    })
 
 
 @app.on_event("startup")
@@ -199,7 +314,11 @@ async def initialize_database() -> None:
         # from fabricating real mailbox contents. Seeding is only permitted via explicit test setup.
         logger.info("Production demo started without synthetic auto-seeding.")
 
-    if not settings.public_demo_mode and settings.task_queue_backend == "local" and settings.dashboard_user_id.strip():
+    automation_user_configured = (
+        settings.dashboard_user_id.strip()
+        and (not settings.public_demo_mode or settings.demo_allow_public_send)
+    )
+    if settings.task_queue_backend == "local" and automation_user_configured:
         local_queue = LocalTaskQueue(
             db_path=settings.local_queue_db_path,
             kill_switch_checker=db.is_kill_switch_active,
@@ -495,7 +614,10 @@ async def toggle_kill_switch(
 async def get_auto_reply_setting(user_id: str = Depends(require_dashboard_auth)):
     """Return the authenticated owner's automatic-reply setting."""
     if settings.public_demo_mode:
-        return {"enabled": False, "mode": "approve", "demo_read_only": True}
+        if not settings.demo_allow_public_send:
+            return {"enabled": False, "mode": "approve", "demo_read_only": True}
+        enabled = await db.get_auto_reply_enabled(get_demo_user_id())
+        return {"enabled": enabled, "mode": "auto_full" if enabled else "approve", "owner_controlled_demo": True}
     enabled = await db.get_auto_reply_enabled(user_id)
     return {"enabled": enabled, "mode": "auto_full" if enabled else "approve"}
 
@@ -507,7 +629,14 @@ async def set_auto_reply_setting(
 ):
     """Opt the authenticated owner into policy-checked automatic replies."""
     if settings.public_demo_mode:
-        raise HTTPException(status_code=403, detail="Automatic sending is disabled in the public demo")
+        if not settings.demo_allow_public_send:
+            raise HTTPException(
+                status_code=403,
+                detail="Owner auto-reply is disabled in this deployment. Set DEMO_ALLOW_PUBLIC_SEND=true to enable it.",
+            )
+        # The public demo mailbox belongs to the demo principal; only the
+        # bearer-authenticated owner can change its automation setting.
+        user_id = get_demo_user_id()
     saved = await db.set_auto_reply_enabled(user_id, request.enabled)
     if not saved:
         raise HTTPException(status_code=500, detail="Could not save automatic-reply setting")
@@ -737,6 +866,7 @@ async def generate_demo_draft(
     http_request: Request,
     draft_request: DemoDraftRequest,
     user_id: str = Depends(demo_mode_auth_dependency),
+    authorization: Optional[str] = Header(default=None),
 ):
     """Generate a draft for synthetic mail using optional OpenRouter inference."""
     if not settings.public_demo_mode:
@@ -853,13 +983,88 @@ async def generate_demo_draft(
                 content=draft_content,
             )
             draft_id = await db.save_draft(draft)
+
+        owner_auto_send = (
+            settings.demo_allow_public_send
+            and _is_dashboard_owner_token(authorization)
+            and await db.get_auto_reply_enabled(get_demo_user_id())
+        )
+        send_scheduled = False
+        send_note = "Draft generated. Sending requires owner approval."
+        if owner_auto_send:
+            email_action = EmailAction(classification["action"])
+            email_category = EmailCategory(classification["category"])
+            raw_headers = email.get("raw_headers") or {}
+            if isinstance(raw_headers, str):
+                raw_headers = json.loads(raw_headers)
+            email_message = EmailMessage(
+                message_id=email["message_id"],
+                thread_id=email.get("thread_id"),
+                sender=email["sender"],
+                sender_email=email["sender_email"],
+                subject=email["subject"],
+                body=email["body"],
+                received_at=datetime.fromisoformat(email["received_at"].replace("Z", "+00:00")),
+                raw_headers=raw_headers,
+            )
+            sender_history = await demo_gmail_provider.fetch_sender_history(email_message.sender_email) if demo_gmail_provider else []
+            sender_history = [message for message in sender_history if message.message_id != email_message.message_id]
+            flagged, flag_reason = demo_send_safety_rules.should_flag_for_human(
+                email_message, email_category, sender_history
+            )
+            can_send, policy_reason = await demo_worth_sending_policy.should_send_reply(
+                email_message, email_category, classification["confidence"], sender_history
+            )
+            rate_limit = demo_send_rate_limiter.check_rate_limit(
+                get_demo_account_id(), email_message.thread_id or email_message.message_id
+            )
+            if (
+                email_action == EmailAction.REPLY
+                and not flagged
+                and can_send
+                and rate_limit.can_send
+                and not await db.is_kill_switch_active()
+                and demo_gmail_provider
+                and demo_mailbox_status.get("connected")
+            ):
+                scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=settings.delay_send_seconds)
+                async with aiosqlite.connect(db.storage.db_path) as conn:
+                    await conn.execute(
+                        "UPDATE drafts SET scheduled_send_at = ?, updated_at = ? WHERE id = ? AND status = ?",
+                        (scheduled_at.isoformat(), datetime.now(timezone.utc).isoformat(), draft_id, DraftStatus.PENDING.value),
+                    )
+                    await conn.commit()
+                await db.log_audit({
+                    "email_id": draft_request.email_id,
+                    "classification_id": classification["id"],
+                    "draft_id": draft_id,
+                    "event_type": "auto_send_scheduled",
+                    "action": email_action,
+                    "reason": "Owner-enabled automatic reply scheduled after policy checks",
+                    "context": {"autonomy_mode": "auto_full", "scheduled_send_at": scheduled_at.isoformat()},
+                })
+                await db.log_audit({
+                    "email_id": draft_request.email_id,
+                    "classification_id": classification["id"],
+                    "event_type": "automation_processed",
+                    "reason": "Owner-generated reply is scheduled for automatic delivery",
+                })
+                _schedule_demo_send(draft_id, draft_request.email_id)
+                send_scheduled = True
+                send_note = f"Automatic reply scheduled; it will send after the {settings.delay_send_seconds}-second undo window."
+            else:
+                send_note = (
+                    "Draft saved for review: "
+                    + (flag_reason if flagged else policy_reason if not can_send else rate_limit.reason or "sending is unavailable")
+                )
         return {
             "draft_id": draft_id,
             "content": draft_content,
             "provider": response.provider,
             "model": response.model,
             "fallback": False,
-            "note": "Draft generated. Sending requires owner approval.",
+            "send_scheduled": send_scheduled,
+            "note": send_note,
         }
     finally:
         await demo_rate_limiter.release_request(client_ip)
@@ -924,7 +1129,12 @@ async def get_audit_log(
         log = await db.get_audit_log(email_id)
     else:
         log = []
-        accounts = await db.get_accounts_by_user(user_id)
+        activity_user_id = (
+            get_demo_user_id()
+            if settings.public_demo_mode and settings.demo_allow_public_send
+            else user_id
+        )
+        accounts = await db.get_accounts_by_user(activity_user_id)
         for account in accounts:
             emails = await db.get_emails_by_account(account["id"], limit=100)
             for email in emails:
@@ -961,7 +1171,13 @@ async def cancel_scheduled_draft(
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
     account = await db.get_account_for_email(draft["email_id"])
-    if not account or account.get("user_id") != user_id:
+    public_owner_account = (
+        settings.public_demo_mode
+        and settings.demo_allow_public_send
+        and account
+        and account.get("id") == get_demo_account_id()
+    )
+    if not account or (account.get("user_id") != user_id and not public_owner_account):
         raise HTTPException(status_code=404, detail="Draft not found")
     if draft.get("status") != DraftStatus.PENDING.value:
         raise HTTPException(status_code=409, detail="Draft is no longer cancellable")

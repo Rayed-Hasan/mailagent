@@ -85,9 +85,18 @@ OPENROUTER_MODEL=google/gemini-3.8-flash
 ```text
 DEMO_RATE_LIMIT_PER_MINUTE=30
 DEMO_MAX_CONCURRENT_REQUESTS=5
-DEMO_ALLOW_PUBLIC_SEND=false
+# Enables owner-authenticated auto replies only. The public /api/demo/send
+# endpoint remains disabled for anonymous visitors.
+DEMO_ALLOW_PUBLIC_SEND=true
 DEMO_RESET_ENDPOINT_ENABLED=false
 ```
+
+Automatic replies are off until the mailbox owner enables **Enable fully
+automatic replies** in the app using the `DASHBOARD_API_TOKEN`. Once enabled,
+the background worker checks the connected demo mailbox every minute, generates
+replies for eligible new mail, and sends them after the configured undo delay.
+Safety rules, rate limits, and the kill switch can still hold a reply for review.
+Urgent and sensitive messages are flagged instead of auto-replied to.
 
 ---
 

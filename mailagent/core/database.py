@@ -442,6 +442,19 @@ class Database:
         )
         return bool(result.data and result.data[0].get("auto_reply_enabled"))
 
+    async def get_auto_reply_updated_at(self, user_id: str) -> Optional[str]:
+        if self.storage:
+            return await self.storage.get_auto_reply_updated_at(user_id)
+        result = (
+            self.client.table("automation_settings")
+            .select("updated_at")
+            .eq("user_id", user_id)
+            .eq("auto_reply_enabled", True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0].get("updated_at") if result.data else None
+
     async def set_auto_reply_enabled(self, user_id: str, enabled: bool) -> bool:
         if self.storage:
             return await self.storage.set_auto_reply_enabled(user_id, enabled)

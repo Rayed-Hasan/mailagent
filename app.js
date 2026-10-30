@@ -550,7 +550,10 @@ async function openEmail(emailId) {
         try {
           const draftRes = await fetch(`${apiConfig.baseUrl}/api/demo/drafts/generate`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(apiConfig.token ? { Authorization: `Bearer ${apiConfig.token}` } : {}),
+            },
             body: JSON.stringify({ email_id: email.id }),
           });
           if (!draftRes.ok) {
@@ -563,10 +566,13 @@ async function openEmail(emailId) {
             throw new Error("The AI provider did not return a usable reply. No draft was saved.");
           }
 
-          draftMeta.textContent = `AI-generated · ${draftData.provider} (${draftData.model})`;
+          draftMeta.textContent = draftData.send_scheduled
+            ? `Automatic send scheduled · ${draftData.provider} (${draftData.model}) · ${draftData.note}`
+            : `AI-generated · ${draftData.provider} (${draftData.model}) · ${draftData.note || "Draft saved"}`;
           draftContent.textContent = replyBody;
           draftArea.style.display = "block";
-          generateBtn.textContent = "✦ Regenerate Reply Draft";
+          generateBtn.textContent = draftData.send_scheduled ? "✦ Reply scheduled to send" : "✦ Regenerate Reply Draft";
+          if (draftData.send_scheduled) generateBtn.disabled = true;
           addTokenUsage(draftData.tokens || 350);
           // Refresh sidebar draft count
           await updateSidebarFromApi();
@@ -764,10 +770,15 @@ async function loadAutoReplySetting() {
   const controls = document.querySelector("#autoReplyControls");
   const button = document.querySelector("#toggleAutoReply");
   if (!status || !controls || !button) return;
-  if (inboxState.isDemoMode) {
-    status.textContent = "Approval mode · automatic sending is disabled in the public demo";
-    controls.hidden = true;
+  if (inboxState.isDemoMode && !apiConfig.token) {
+    status.textContent = "Public demo · owner authentication is required to configure automatic replies";
+    controls.hidden = false;
+    button.dataset.ownerAuthNeeded = "true";
+    button.textContent = "Configure owner auto mode";
     return;
+  }
+  if (inboxState.isDemoMode && apiConfig.token) {
+    button.dataset.ownerAuthNeeded = "false";
   }
   if (!apiConfig.token) {
     status.textContent = "Connect as the owner to configure automatic replies";
@@ -782,6 +793,12 @@ async function loadAutoReplySetting() {
     });
     if (!response.ok) throw new Error("Could not load setting");
     const setting = await response.json();
+    if (setting.demo_read_only) {
+      status.textContent = "Owner auto-reply is disabled in this deployment; enable DEMO_ALLOW_PUBLIC_SEND to configure it";
+      controls.hidden = true;
+      return;
+    }
+    controls.hidden = false;
     button.dataset.enabled = String(setting.enabled);
     button.textContent = setting.enabled ? "Disable automatic replies" : "Enable fully automatic replies";
     status.textContent = setting.enabled
@@ -794,6 +811,14 @@ async function loadAutoReplySetting() {
 
 document.querySelector("#toggleAutoReply")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
+  if (inboxState.isDemoMode && !apiConfig.token) {
+    const token = window.prompt("Enter the owner dashboard API token to configure automatic replies:");
+    if (!token) return;
+    apiConfig.token = token;
+    sessionStorage.setItem("mailagent.dashboardToken", token);
+    await loadAutoReplySetting();
+    return;
+  }
   const enabled = button.dataset.enabled !== "true";
   button.disabled = true;
   try {

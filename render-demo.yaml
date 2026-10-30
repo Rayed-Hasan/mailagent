@@ -11,6 +11,9 @@ services:
       # Demo Mode Configuration
       - key: PUBLIC_DEMO_MODE
         value: "true"
+      # Owner-authenticated automation only; anonymous demo send endpoints remain disabled.
+      - key: DEMO_ALLOW_PUBLIC_SEND
+        value: "true"
       - key: ENVIRONMENT
         value: production
       - key: OPENROUTER_API_KEY

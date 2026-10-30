@@ -82,33 +82,8 @@ class GroqProvider(LLMProvider):
 
         # Handle JSON mode via response_schema if provided
         if response_schema:
-            # Add additionalProperties: false to all objects in the schema for Groq
-            def add_additional_properties(schema):
-                if isinstance(schema, dict):
-                    if "type" in schema and schema["type"] == "object":
-                        if "additionalProperties" not in schema:
-                            schema["additionalProperties"] = False
-                    for key, value in schema.items():
-                        if key in ["properties", "items", "additionalProperties"]:
-                            continue
-                        if isinstance(value, dict):
-                            add_additional_properties(value)
-                        elif isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, dict):
-                                    add_additional_properties(item)
-
-            schema_copy = response_schema.copy()
-            add_additional_properties(schema_copy)
-
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "mailagent_reply",
-                    "strict": True,
-                    "schema": schema_copy,
-                },
-            }
+            # Use simpler JSON mode instead of strict schema for better compatibility
+            payload["response_format"] = {"type": "json_object"}
         elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 

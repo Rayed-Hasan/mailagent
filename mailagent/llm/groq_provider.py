@@ -74,19 +74,25 @@ class GroqProvider(LLMProvider):
             "Content-Type": "application/json",
         }
 
+        gpt_oss_models = {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
+        completion_budget = max_tokens
+        if model in gpt_oss_models and response_schema is not None:
+            # 300-1024 tokens can be exhausted by GPT-OSS reasoning alone;
+            # reserve enough completion space for the constrained JSON body.
+            completion_budget = max(completion_budget, 4096)
+
         payload: Dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            # Groq has deprecated max_tokens; GPT-OSS also spends a portion
+            # of this completion budget on reasoning before emitting JSON.
+            "max_completion_tokens": completion_budget,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
 
         # GPT-OSS supports strict structured outputs. Prefer that over JSON
         # Object Mode so an empty/invalid generation cannot silently break
         # draft parsing. Other Groq models use JSON Object Mode as a fallback.
-        if response_schema is not None and model in {
-            "openai/gpt-oss-20b",
-            "openai/gpt-oss-120b",
-        }:
+        if response_schema is not None and model in gpt_oss_models:
             strict_schema = dict(response_schema)
             strict_schema["additionalProperties"] = False
             strict_schema["required"] = list(strict_schema.get("properties", {}).keys())
@@ -98,7 +104,10 @@ class GroqProvider(LLMProvider):
                     "schema": strict_schema,
                 },
             }
-            payload["reasoning_format"] = "hidden"
+            # Keep reasoning tokens out of the returned message while using a
+            # low reasoning budget so the model can finish the JSON payload.
+            payload["include_reasoning"] = False
+            payload["reasoning_effort"] = "low"
         elif response_schema is not None or json_mode:
             payload["response_format"] = {"type": "json_object"}
 

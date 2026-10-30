@@ -258,7 +258,7 @@ async function updateSidebarFromApi() {
   }
 }
 
-function renderDraftsList(drafts) {
+function renderDraftsList(drafts, sent = false) {
   mailList.replaceChildren();
   drafts.forEach((draft) => {
     const item = document.createElement("article");
@@ -286,14 +286,19 @@ function renderDraftsList(drafts) {
     meta.append(sender, received);
 
     const subject = document.createElement("h3");
-    subject.textContent = draft.subject ? `Draft Reply: ${draft.subject}` : "AI Draft Reply (Pending Approval)";
+    subject.textContent = draft.subject
+      ? `${sent ? "Sent Reply" : "Draft Reply"}: ${draft.subject}`
+      : (sent ? "Automatic reply sent" : "AI Draft Reply (Pending Approval)");
 
     const preview = document.createElement("p");
     preview.textContent = (draft.content || "").replace(/\s+/g, " ").slice(0, 180);
 
     const tags = document.createElement("div");
     tags.className = "mail-tags";
-    if (draft.scheduled_send_at) {
+    if (sent) {
+      appendTag(tags, "Sent", "reply-tag");
+      if (draft.sent_at) appendTag(tags, formatDate(draft.sent_at), "important-tag");
+    } else if (draft.scheduled_send_at) {
       appendTag(tags, "Auto-send scheduled", "important-tag");
       appendTag(tags, "60-second undo window", "reply-tag");
     } else {
@@ -302,6 +307,12 @@ function renderDraftsList(drafts) {
     }
 
     body.append(meta, subject, preview, tags);
+
+    if (sent) {
+      item.append(check, avatar, body);
+      mailList.appendChild(item);
+      return;
+    }
 
     const more = document.createElement("button");
     more.className = "more-button";
@@ -470,8 +481,21 @@ async function fetchInbox(append = false) {
   if (inboxState.activeNav === "sent") {
     loadMoreButton.hidden = true;
     setConnectionStatus("Sent replies · Demo", true);
-    setMailListState("Automatic replies are sent by the background agent. Gmail's Sent folder is not exposed in this public demo.");
-    return true;
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/demo/sent-replies`);
+      if (!response.ok) throw new Error("Could not load sent replies");
+      const data = await response.json();
+      const replies = data.replies || [];
+      if (!replies.length) {
+        setMailListState("No automatic replies have been sent yet. Replies sent by MailAgent will appear here.");
+        return true;
+      }
+      renderDraftsList(replies, true);
+      return true;
+    } catch (e) {
+      setMailListState(e.message || "Could not load sent replies", true);
+      return false;
+    }
   }
   if (inboxState.activeNav === "archive") {
     loadMoreButton.hidden = true;

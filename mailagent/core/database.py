@@ -291,6 +291,25 @@ class Database:
             for draft in result.data
         ]
 
+    async def get_sent_drafts(self, account_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get agent-sent replies for an account."""
+        if self.storage:
+            return await self.storage.get_sent_drafts(account_id, limit)
+
+        result = (
+            self.client.table("drafts")
+            .select("*, emails!inner(account_id)")
+            .eq("status", "sent")
+            .eq("emails.account_id", account_id)
+            .order("sent_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [
+            {key: value for key, value in draft.items() if key != "emails"}
+            for draft in result.data
+        ]
+
     # Audit log operations
     async def log_audit(self, entry: AuditLogEntry) -> str:
         """Log an audit entry"""

@@ -830,6 +830,33 @@ async def get_drafts(
             await demo_rate_limiter.release_request(client_ip)
 
 
+@app.get("/api/demo/sent-replies")
+async def get_demo_sent_replies(
+    request: Request,
+    user_id: str = Depends(demo_mode_auth_dependency),
+):
+    """Expose only the configured demo mailbox's agent-sent replies."""
+    if not settings.public_demo_mode or not settings.demo_allow_public_send:
+        raise HTTPException(status_code=404, detail="Not found")
+    client_ip = await get_client_ip(request)
+    try:
+        account_id = get_demo_account_id()
+        await require_account_owner(account_id, user_id)
+        replies = await db.get_sent_drafts(account_id, limit=50)
+        enriched = []
+        for reply in replies:
+            email = await db.get_email(reply["email_id"]) if reply.get("email_id") else None
+            enriched.append({
+                **reply,
+                "subject": email.get("subject", "") if email else "",
+                "sender": email.get("sender", "") if email else "",
+                "sender_email": email.get("sender_email", "") if email else "",
+            })
+        return {"replies": enriched}
+    finally:
+        await demo_rate_limiter.release_request(client_ip)
+
+
 @app.post("/api/drafts/approve")
 async def approve_draft(
     http_request: Request,

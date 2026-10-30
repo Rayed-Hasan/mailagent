@@ -500,6 +500,19 @@ class SQLiteStorage(StorageInterface):
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+    async def get_sent_drafts(self, account_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get replies sent by the agent for an account."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT d.* FROM drafts d
+                JOIN emails e ON d.email_id = e.id
+                WHERE d.status = 'sent' AND e.account_id = ?
+                ORDER BY COALESCE(d.sent_at, d.updated_at) DESC
+                LIMIT ?
+            """, (account_id, limit))
+            return [dict(row) for row in await cursor.fetchall()]
+
     # Audit log operations
     async def log_audit(self, entry: AuditLogEntry) -> str:
         """Log an audit entry"""

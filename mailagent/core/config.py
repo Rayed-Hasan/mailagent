@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     # Agent Settings
     max_auto_replies_per_hour: int = 10
     confidence_threshold: float = 0.85
-    default_autonomy_mode: Literal["approve", "auto_safe", "auto_full"] = "approve"
-    delay_send_seconds: int = 60
+    default_autonomy_mode: Literal["approve", "auto_safe", "auto_full"] = "auto_full"
+    delay_send_seconds: int = 5
 
     # Dashboard
     # Loopback is the safe personal default. Enterprise deployments should put

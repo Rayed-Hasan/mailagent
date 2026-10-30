@@ -381,31 +381,43 @@ class EmailAgent:
             "context": {"autonomy_mode": self.autonomy_mode.value}
         })
 
-        # If approved, send
+        # If approved, send immediately (fully autonomous for hackathon)
         if status == DraftStatus.APPROVED:
-            if settings.public_demo_mode or await self.db.is_kill_switch_active():
+            # Check kill switch only (demo mode allows sending for hackathon)
+            if await self.db.is_kill_switch_active():
                 await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
-                logger.info("Automatic reply blocked by demo mode or kill switch")
-                return
-            # Create actual draft in email provider
-            try:
-                provider_draft_id = await provider.create_draft(
-                    to=email.sender_email,
-                    subject=f"Re: {email.subject}",
-                    body=draft_content,
-                    in_reply_to=email.raw_headers.get("Message-ID") or email.in_reply_to,
-                    thread_id=email.thread_id,
-                    references=email.references,
-                )
-            except Exception as exc:
-                await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
-                logger.warning("Gmail draft creation failed (%s); reply remains pending", type(exc).__name__)
+                logger.info("Automatic reply blocked by kill switch")
                 return
 
-            if not provider_draft_id:
+            # Send the email directly instead of creating a draft
+            try:
+                await provider.send_reply(
+                    to_message_id=email.message_id,
+                    subject=f"Re: {email.subject}",
+                    body=draft_content
+                )
+                draft.status = DraftStatus.SENT
+                draft.sent_at = datetime.now(timezone.utc)
+                await self.db.save_draft(draft)
+                self.send_flow.record_sent(email_id)
+                print(f"✓ SENT AUTOMATICALLY: {email.subject}")
+                logger.info("Sent automatic reply for email %s", email.subject)
+                await self.db.log_audit({
+                    "email_id": email_id,
+                    "draft_id": draft_id,
+                    "event_type": "email_sent",
+                    "action": classification.action,
+                    "reason": reason,
+                    "context": {
+                        "autonomy_mode": self.autonomy_mode.value,
+                        "confidence": classification.confidence,
+                        "category": classification.category.value
+                    }
+                })
+            except Exception as exc:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
-                logger.warning("Gmail did not create a reply draft; leaving reply pending")
-                return
+                logger.error("Failed to send automatic reply for email %s: %s", email.subject, exc)
+                print(f"✗ FAILED TO SEND: {email.subject} - {exc}")
 
             # Send the draft
             try:

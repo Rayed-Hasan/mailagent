@@ -116,7 +116,7 @@ async def process_owner_mailboxes() -> None:
                             stats = await demo_sync_service.sync_mailbox(
                                 account_id=get_demo_account_id(),
                                 provider=demo_gmail_provider,
-                                limit=50,
+                                limit=500,
                             )
                             demo_mailbox_status["last_sync"] = stats.get("synced_at")
                             demo_mailbox_status["last_error"] = stats.get("error_message")
@@ -261,13 +261,41 @@ async def initialize_database() -> None:
     # In public demo mode, check for owner-configured real Gmail mailbox
     if settings.public_demo_mode:
         from mailagent.mail.sync_service import GmailSyncService
-        from mailagent.providers.gmail_provider import GmailProvider
+        from mailagent.providers.gmail_provider import GmailProvider, FULL_SCOPES
         from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email
 
         demo_sync_service = GmailSyncService(db)
+        saved_account = await db.get_account(get_demo_account_id())
+        saved_credentials = (saved_account or {}).get("credentials") or {}
+        saved_scopes = set(saved_credentials.get("scopes") or [])
+        has_full_mailbox_access = {
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        }.issubset(saved_scopes)
 
+        # Prefer a recently owner-authorized full-scope token over the legacy
+        # environment token, which may have been issued with narrower access.
+        if has_full_mailbox_access:
+            demo_gmail_provider = GmailProvider(saved_credentials, scopes=FULL_SCOPES)
+            if await demo_gmail_provider.connect():
+                profile = await demo_gmail_provider.get_user_profile()
+                demo_mailbox_status["connected"] = True
+                demo_mailbox_status["email_address"] = (
+                    (profile.get("emailAddress") if profile else None)
+                    or saved_account.get("email_address")
+                    or get_demo_account_email()
+                )
+                sync_stats = await demo_sync_service.sync_mailbox(
+                    account_id=get_demo_account_id(),
+                    provider=demo_gmail_provider,
+                    limit=500,
+                )
+                demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
+            else:
+                demo_mailbox_status["connected"] = False
+                demo_mailbox_status["last_error"] = "Failed to connect with owner-authorized Gmail access"
         # 1. Check if owner provided persistent Gmail refresh token via environment
-        if settings.demo_gmail_refresh_token:
+        elif settings.demo_gmail_refresh_token:
             client_id = settings.demo_gmail_client_id or settings.google_client_id
             client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
             token_dict = {
@@ -276,7 +304,7 @@ async def initialize_database() -> None:
                 "client_secret": client_secret,
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
-            demo_gmail_provider = GmailProvider(token_dict)
+            demo_gmail_provider = GmailProvider(token_dict, scopes=FULL_SCOPES)
             connected = await demo_gmail_provider.connect()
             if connected:
                 profile = await demo_gmail_provider.get_user_profile()
@@ -300,7 +328,7 @@ async def initialize_database() -> None:
                 sync_stats = await demo_sync_service.sync_mailbox(
                     account_id=account_id,
                     provider=demo_gmail_provider,
-                    limit=50,
+                    limit=500,
                 )
                 demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
             else:
@@ -311,7 +339,7 @@ async def initialize_database() -> None:
             account_id = get_demo_account_id()
             acc = await db.get_account(account_id)
             if acc and acc.get("credentials") and acc.get("provider") == "gmail":
-                demo_gmail_provider = GmailProvider(acc["credentials"])
+                demo_gmail_provider = GmailProvider(acc["credentials"], scopes=FULL_SCOPES)
                 if await demo_gmail_provider.connect():
                     demo_mailbox_status["connected"] = True
                     demo_mailbox_status["email_address"] = acc.get("email_address")
@@ -319,7 +347,7 @@ async def initialize_database() -> None:
                     sync_stats = await demo_sync_service.sync_mailbox(
                         account_id=account_id,
                         provider=demo_gmail_provider,
-                        limit=50,
+                        limit=500,
                     )
                     demo_mailbox_status["last_sync"] = sync_stats.get("synced_at")
 
@@ -703,6 +731,7 @@ async def get_emails_with_classifications(
     account_id: str,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    folder: Optional[str] = None,
     category: Optional[str] = None,
     min_priority: Optional[int] = Query(default=None, ge=0, le=100),
     max_priority: Optional[int] = Query(default=None, ge=0, le=100),
@@ -727,8 +756,8 @@ async def get_emails_with_classifications(
         try:
             result = await db.get_emails_with_classifications(
                 account_id=account_id,
-                limit=limit,
-                offset=offset,
+                limit=1000 if settings.public_demo_mode and folder else limit,
+                offset=0 if settings.public_demo_mode and folder else offset,
                 category=category,
                 min_priority=min_priority,
                 max_priority=max_priority,
@@ -736,6 +765,31 @@ async def get_emails_with_classifications(
                 needs_reply=needs_reply,
                 sort_by=sort_by,
             )
+            if settings.public_demo_mode and folder:
+                requested_folder = folder.strip().upper()
+                if requested_folder not in {"ALL", "INBOX", "SENT", "DRAFT", "ARCHIVE", "SPAM", "TRASH"}:
+                    raise HTTPException(status_code=422, detail="Unsupported Gmail folder")
+                filtered_emails = []
+                for email in result.get("emails", []):
+                    headers = email.get("raw_headers") or {}
+                    if isinstance(headers, str):
+                        try:
+                            headers = json.loads(headers)
+                        except json.JSONDecodeError:
+                            headers = {}
+                    labels = set(headers.get("X-MailAgent-Gmail-Label-Ids", "").split())
+                    if requested_folder == "ALL":
+                        matches = True
+                    elif requested_folder == "ARCHIVE":
+                        matches = not labels.intersection({"INBOX", "SENT", "DRAFT", "SPAM", "TRASH"})
+                    else:
+                        matches = requested_folder in labels
+                    if matches:
+                        filtered_emails.append(email)
+                result["total"] = len(filtered_emails)
+                result["emails"] = filtered_emails[offset:offset + limit]
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.error("Failed to load classified emails (%s)", type(exc).__name__)
             raise HTTPException(
@@ -1398,7 +1452,7 @@ async def get_demo_status(
                 and await db.get_auto_reply_enabled(get_demo_user_id())
             ),
             "note": "Messages in the public demo are retrieved from the dedicated demo mailbox.",
-            "sync_scope": "Inbox, archived mail, and spam (sent, drafts, and trash excluded).",
+            "sync_scope": "All Gmail folders: Inbox, All Mail, Sent, Drafts, Archive, Spam, and Trash.",
         }
     finally:
         pass  # Rate limiting is handled by demo_mode_auth_dependency
@@ -1436,7 +1490,7 @@ async def trigger_demo_sync(
             stats = await demo_sync_service.sync_mailbox(
                 account_id=account_id,
                 provider=demo_gmail_provider,
-                limit=50,
+                limit=500,
             )
         demo_mailbox_status["last_sync"] = stats.get("synced_at")
         demo_mailbox_status["last_error"] = stats.get("error_message")
@@ -1661,7 +1715,7 @@ async def get_owner_gmail_auth_url():
     """
     import secrets
     import hashlib
-    from mailagent.providers.gmail_provider import GmailOAuthFlow, DEFAULT_SCOPES
+    from mailagent.providers.gmail_provider import GmailOAuthFlow, FULL_SCOPES
 
     client_id = settings.demo_gmail_client_id or settings.google_client_id
     client_secret = settings.demo_gmail_client_secret or settings.google_client_secret
@@ -1691,7 +1745,7 @@ async def get_owner_gmail_auth_url():
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
-            scopes=DEFAULT_SCOPES,
+            scopes=FULL_SCOPES,
             state=state,
         )
     except Exception as exc:
@@ -1708,7 +1762,7 @@ async def get_owner_gmail_auth_url():
     return {
         "auth_url": auth_url,
         "redirect_uri": redirect_uri,
-        "scopes": DEFAULT_SCOPES,
+        "scopes": FULL_SCOPES,
     }
 
 
@@ -1720,7 +1774,7 @@ async def receive_gmail_callback(
 ):
     """Complete the server-side OAuth flow without exposing the code to the page."""
     import hashlib
-    from mailagent.providers.gmail_provider import GmailOAuthFlow, GmailProvider, DEFAULT_SCOPES
+    from mailagent.providers.gmail_provider import GmailOAuthFlow, GmailProvider, FULL_SCOPES
     from mailagent.demo.demo_data import get_demo_account_id, get_demo_user_id
     from mailagent.mail.sync_service import GmailSyncService
 
@@ -1763,7 +1817,7 @@ async def receive_gmail_callback(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
-            scopes=DEFAULT_SCOPES,
+            scopes=FULL_SCOPES,
         )
     except Exception as exc:
         # Do not log exception text: OAuth libraries may include request data.
@@ -1788,7 +1842,7 @@ async def receive_gmail_callback(
         return gmail_oauth_result_redirect("failed")
 
     # Initialize provider and get actual email address
-    provider = GmailProvider(tokens, scopes=DEFAULT_SCOPES)
+    provider = GmailProvider(tokens, scopes=FULL_SCOPES)
     try:
         if not await provider.connect():
             logger.error("Gmail API connection failed after OAuth exchange")
@@ -1821,7 +1875,7 @@ async def receive_gmail_callback(
         sync_stats = await demo_sync_service.sync_mailbox(
             account_id=account_id,
             provider=provider,
-            limit=50,
+            limit=500,
         )
     except Exception as exc:
         logger.error("Gmail credentials or initial sync could not be persisted (%s)", type(exc).__name__)

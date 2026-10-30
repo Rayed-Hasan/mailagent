@@ -55,6 +55,7 @@ class GmailSyncService:
             "duplicates": 0,
             "errors": 0,
             "unclassified": 0,
+            "excluded_from_reply_processing": 0,
             "synced_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -83,6 +84,15 @@ class GmailSyncService:
                 # Save email to database
                 email_id = await self.db.save_email(email, account_id)
                 stats["new"] += 1
+
+                # Keep all folders visible in the mailbox, but never classify
+                # outbound mail, drafts, or trash as inbound agent work.
+                gmail_label_ids = set(
+                    email.raw_headers.get("X-MailAgent-Gmail-Label-Ids", "").split()
+                )
+                if gmail_label_ids.intersection({"SENT", "DRAFT", "TRASH"}):
+                    stats["excluded_from_reply_processing"] += 1
+                    continue
 
                 # Classify email using AI (OpenRouter or labelled fallback)
                 classification = await self.classifier.classify(email)

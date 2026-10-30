@@ -84,8 +84,11 @@ async function checkDemoMode() {
           setConnectionStatus("Gmail disconnected · Owner authorization pending", false);
         }
 
-        // Hide connect button in demo mode since judges do not log in
-        if (connectButton) connectButton.style.display = "none";
+        // Only the authenticated owner sees the broad-scope reauthorization action.
+        if (connectButton) {
+          connectButton.style.display = apiConfig.token ? "" : "none";
+          connectButton.textContent = "Authorize full Gmail";
+        }
 
         // Update profile card with demo account info
         updateProfileCard(data.demo_account_email, data.gmail_connected);
@@ -258,8 +261,8 @@ async function updateSidebarFromApi() {
   }
 }
 
-function renderDraftsList(drafts, sent = false) {
-  mailList.replaceChildren();
+function renderDraftsList(drafts, sent = false, append = false) {
+  if (!append) mailList.replaceChildren();
   drafts.forEach((draft) => {
     const item = document.createElement("article");
     item.className = "mail-item high-priority";
@@ -437,6 +440,16 @@ function queryParams() {
       params.set("needs_reply", "true");
     } else if (inboxState.activeNav === "newsletters") {
       params.set("category", "newsletter");
+    } else {
+      const gmailFolders = {
+        inbox: "INBOX",
+        "all-mail": "ALL",
+        sent: "SENT",
+        archive: "ARCHIVE",
+        spam: "SPAM",
+        trash: "TRASH",
+      };
+      if (gmailFolders[inboxState.activeNav]) params.set("folder", gmailFolders[inboxState.activeNav]);
     }
   }
   return params;
@@ -467,43 +480,24 @@ async function fetchInbox(append = false) {
       if (!draftsRes.ok) throw new Error("Could not load drafts");
       const draftsData = await draftsRes.json();
       const draftsList = draftsData.drafts || [];
-      if (!draftsList.length) {
-        setMailListState("No pending drafts. Open any priority email and click '✦ Generate AI Reply Draft' to test.");
+      const gmailDraftResponse = await fetch(
+        `${apiConfig.baseUrl}/api/emails/with-classifications?account_id=${encodeURIComponent(accId)}&folder=DRAFT&limit=100&sort_by=received_at`,
+      );
+      if (!gmailDraftResponse.ok) throw new Error("Could not load Gmail drafts");
+      const gmailDraftData = await gmailDraftResponse.json();
+      const gmailDrafts = gmailDraftData.emails || [];
+      if (!draftsList.length && !gmailDrafts.length) {
+        setMailListState("No Gmail drafts or pending MailAgent replies.");
         return true;
       }
-      renderDraftsList(draftsList);
+      if (gmailDrafts.length) renderRealEmails(gmailDrafts);
+      if (draftsList.length) renderDraftsList(draftsList, false, gmailDrafts.length > 0);
       return true;
     } catch (e) {
       setMailListState(e.message || "Failed to load drafts", true);
       return false;
     }
   }
-  if (inboxState.activeNav === "sent") {
-    loadMoreButton.hidden = true;
-    setConnectionStatus("Sent replies · Demo", true);
-    try {
-      const response = await fetch(`${apiConfig.baseUrl}/api/demo/sent-replies`);
-      if (!response.ok) throw new Error("Could not load sent replies");
-      const data = await response.json();
-      const replies = data.replies || [];
-      if (!replies.length) {
-        setMailListState("No automatic replies have been sent yet. Replies sent by MailAgent will appear here.");
-        return true;
-      }
-      renderDraftsList(replies, true);
-      return true;
-    } catch (e) {
-      setMailListState(e.message || "Could not load sent replies", true);
-      return false;
-    }
-  }
-  if (inboxState.activeNav === "archive") {
-    loadMoreButton.hidden = true;
-    setConnectionStatus("Archive", true);
-    setMailListState("No archived threads in current session.");
-    return true;
-  }
-
   // In demo mode, don't require token
   if (!inboxState.isDemoMode && (!apiConfig.baseUrl || !apiConfig.token)) {
     setConnectionStatus("Connect an inbox to begin");
@@ -633,6 +627,23 @@ async function openEmail(emailId) {
 }
 
 async function connectInbox() {
+  if (inboxState.isDemoMode) {
+    if (!apiConfig.token) {
+      showToast("Owner dashboard token required to authorize Gmail");
+      return;
+    }
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/owner/gmail/auth-url`, {
+        headers: { Authorization: `Bearer ${apiConfig.token}` },
+      });
+      const data = await response.json();
+      if (!response.ok || !data.auth_url) throw new Error(data.detail || "Could not start Gmail authorization");
+      window.location.assign(data.auth_url);
+    } catch (error) {
+      showToast(error.message || "Could not start Gmail authorization");
+    }
+    return;
+  }
   const baseUrl = apiConfig.baseUrl
     || window.prompt("Dashboard API URL", "http://127.0.0.1:8000");
   if (!baseUrl) return;
@@ -781,9 +792,12 @@ function handleNavigation(hash) {
 
   const titles = {
     "inbox": ["Priority inbox", "Live messages from your connected account"],
+    "all-mail": ["All Mail", "Every message and folder in the connected Gmail account"],
     "drafts": ["Drafts", "AI-assisted draft replies ready for review"],
     "sent": ["Sent messages", "Messages sent from your mailbox"],
     "archive": ["Archive", "Archived email threads"],
+    "spam": ["Spam", "Messages in Gmail Spam"],
+    "trash": ["Trash", "Messages in Gmail Trash"],
     "follow-up": ["Follow up", "Messages requiring your reply or action"],
     "read-later": ["Read later", "Articles, newsletters, and low-priority reading"],
     "newsletters": ["Newsletters", "Subscriptions and recurring digests"],

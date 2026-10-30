@@ -20,8 +20,10 @@ Judges can open the public website without creating an account or logging in, vi
    - User support email: Select your dedicated demo Gmail address.
    - Test Users: Add the dedicated test Gmail address (e.g. `your-dedicated-demo@gmail.com`).
 4. **Required OAuth Scopes**:
-   - `https://www.googleapis.com/auth/gmail.readonly` (read-only inbox access for classification and synchronization).
-   - `https://www.googleapis.com/auth/gmail.compose` (create and view drafts).
+   - `https://www.googleapis.com/auth/gmail.modify` (read all folders and manage labels/archive state).
+   - `https://www.googleapis.com/auth/gmail.send` (send approved or policy-eligible replies).
+   - `https://www.googleapis.com/auth/gmail.compose` (create and manage drafts).
+   - These are restricted Gmail scopes. Configure the OAuth consent screen and complete Google's verification requirements for public use. The demo displays this dedicated account's folder contents to every visitor.
 5. **Create OAuth 2.0 Client Credentials**:
    - Navigate to **APIs & Services > Credentials > Create Credentials > OAuth client ID**.
    - Application Type: **Web application**.

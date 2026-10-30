@@ -25,11 +25,6 @@ READONLY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
 ]
 
-DEFAULT_SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.compose',
-]
-
 FULL_SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.modify',
@@ -37,6 +32,14 @@ FULL_SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
 ]
 
+DEFAULT_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.compose',
+]
+
+# The public hackathon demo needs read, label/archive, draft and send access.
+# Google's gmail.modify scope covers reading, composing, and modifying mail;
+# gmail.send allows sending from Gmail's API.
 SCOPES = DEFAULT_SCOPES
 logger = logging.getLogger("mailagent.gmail")
 
@@ -107,10 +110,34 @@ class GmailProvider(EmailProviderInterface):
 
         try:
             # Build search query
+            if folder.lower() in {"draft", "drafts"}:
+                draft_results = self.service.users().drafts().list(
+                    userId="me",
+                    maxResults=min(max(1, limit), 500),
+                    includeSpamTrash=True,
+                ).execute()
+                for draft_ref in draft_results.get("drafts", []):
+                    try:
+                        draft = self.service.users().drafts().get(
+                            userId="me", id=draft_ref["id"], format="full"
+                        ).execute()
+                        message = draft.get("message") or {}
+                        message.setdefault("labelIds", []).append("DRAFT")
+                        payload = message.get("payload") or {}
+                        payload.setdefault("headers", []).append({
+                            "name": "X-MailAgent-Gmail-Draft-Id",
+                            "value": draft["id"],
+                        })
+                        message["payload"] = payload
+                        parsed = self._parse_gmail_message(message)
+                        if parsed:
+                            messages.append(parsed)
+                    except Exception as exc:
+                        logger.warning("Gmail draft fetch failed (%s)", type(exc).__name__)
+                return messages
+
             if folder.lower() in {"anywhere", "all", "all-mail"}:
-                # Pull Inbox, archived, and spam mail for the demo inbox view.
-                # Keep sent mail, drafts, and trash out of the incoming queue.
-                query = "in:anywhere -in:sent -in:drafts -in:trash"
+                query = "in:anywhere"
             else:
                 query = f"in:{folder.lower()}"
             if since:
@@ -121,7 +148,8 @@ class GmailProvider(EmailProviderInterface):
             results = self.service.users().messages().list(
                 userId='me',
                 q=query,
-                maxResults=limit
+                maxResults=min(max(1, limit), 500),
+                includeSpamTrash=True,
             ).execute()
 
             message_ids = results.get('messages', [])
@@ -141,6 +169,10 @@ class GmailProvider(EmailProviderInterface):
                 except Exception as exc:
                     logger.warning("Gmail message fetch failed (%s)", type(exc).__name__)
                     continue
+
+            if folder.lower() in {"anywhere", "all", "all-mail"}:
+                draft_messages = await self.fetch_emails(limit=limit, folder="drafts")
+                messages.extend(draft_messages)
 
         except HttpError as exc:
             logger.warning(

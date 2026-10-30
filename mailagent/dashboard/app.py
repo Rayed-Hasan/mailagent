@@ -8,7 +8,7 @@ import logging
 import asyncio
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
-from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
@@ -1766,6 +1766,22 @@ async def get_owner_gmail_auth_url():
     }
 
 
+@app.get("/api/owner/gmail/refresh-token", dependencies=[Depends(require_dashboard_auth)])
+async def get_owner_gmail_refresh_token():
+    """Return the newly authorized refresh token to the authenticated owner for Render secrets."""
+    if not settings.public_demo_mode:
+        raise HTTPException(status_code=404, detail="Not found")
+    account = await db.get_account(get_demo_account_id())
+    credentials = (account or {}).get("credentials") or {}
+    refresh_token = credentials.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=404, detail="No owner-authorized Gmail token is saved")
+    return JSONResponse(
+        {"refresh_token": refresh_token, "scopes": credentials.get("scopes", [])},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
 @app.get("/auth/gmail/callback")
 async def receive_gmail_callback(
     code: Optional[str] = None,
@@ -1896,11 +1912,27 @@ async def receive_gmail_callback(
 async def gmail_oauth_result(status: str = Query(default="failed", pattern="^(success|failed)$")):
     """Show a fixed result page after the code-bearing callback URL is cleared."""
     if status == "success":
-        content = "<main><h1>Gmail connected</h1><p>The mailbox was authorized and its initial sync completed. You may close this page.</p></main>"
+        content = """<main><h1>Gmail connected</h1><p>Authorization succeeded. Copy the refresh token into Render's <code>DEMO_GMAIL_REFRESH_TOKEN</code> environment variable so it survives a restart.</p><button id="copy-token">Load refresh token</button><textarea id="refresh-token" rows="4" readonly hidden></textarea><p id="token-status" role="status"></p></main><script>
+        const token = sessionStorage.getItem('mailagent.dashboardToken');
+        const button = document.getElementById('copy-token');
+        button.addEventListener('click', async () => {
+          if (!token) { document.getElementById('token-status').textContent = 'Owner session was not found. Reopen the app with your owner token and reconnect.'; return; }
+          button.disabled = true;
+          try {
+            const response = await fetch('/api/owner/gmail/refresh-token', {headers: {Authorization: 'Bearer ' + token}, cache: 'no-store'});
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Could not load token');
+            const field = document.getElementById('refresh-token');
+            field.value = data.refresh_token; field.hidden = false; field.select();
+            await navigator.clipboard.writeText(data.refresh_token);
+            document.getElementById('token-status').textContent = 'Copied. Paste this value into Render as DEMO_GMAIL_REFRESH_TOKEN, then save and redeploy.';
+          } catch (error) { document.getElementById('token-status').textContent = error.message; button.disabled = false; }
+        });
+        </script>"""
     else:
         content = "<main><h1>Gmail connection failed</h1><p>Restart the owner authorization flow. The server logs contain a safe diagnostic category.</p></main>"
     return HTMLResponse(
-        f"<!doctype html><html lang='en'><meta charset='utf-8'><title>Mail Agent Gmail</title><body>{content}</body></html>",
+        "<!doctype html><html lang='en'><meta charset='utf-8'><title>Mail Agent Gmail</title><body>" + content + "</body></html>",
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
 

@@ -84,10 +84,11 @@ async function checkDemoMode() {
           setConnectionStatus("Gmail disconnected · Owner authorization pending", false);
         }
 
-        // Only the authenticated owner sees the broad-scope reauthorization action.
+        // Public visitors may see the owner action, but the server requires the
+        // dashboard bearer token before it can start OAuth.
         if (connectButton) {
-          connectButton.style.display = apiConfig.token ? "" : "none";
-          connectButton.textContent = "Authorize full Gmail";
+          connectButton.style.display = "";
+          connectButton.textContent = data.gmail_connected ? "Reauthorize Gmail" : "Connect Gmail (owner)";
         }
 
         // Update profile card with demo account info
@@ -628,13 +629,14 @@ async function openEmail(emailId) {
 
 async function connectInbox() {
   if (inboxState.isDemoMode) {
-    if (!apiConfig.token) {
-      showToast("Owner dashboard token required to authorize Gmail");
-      return;
-    }
+    const ownerToken = apiConfig.token
+      || window.prompt("Owner dashboard token (available in Render environment variables)");
+    if (!ownerToken) return;
+    apiConfig.token = ownerToken;
+    sessionStorage.setItem("mailagent.dashboardToken", ownerToken);
     try {
       const response = await fetch(`${apiConfig.baseUrl}/api/owner/gmail/auth-url`, {
-        headers: { Authorization: `Bearer ${apiConfig.token}` },
+        headers: { Authorization: `Bearer ${ownerToken}` },
       });
       const data = await response.json();
       if (!response.ok || !data.auth_url) throw new Error(data.detail || "Could not start Gmail authorization");

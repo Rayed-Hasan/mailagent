@@ -8,7 +8,7 @@
 
 ## What It Does
 
-Mail Agent reads your email, classifies it by priority, filters out noise, and drafts responses — all locally on your computer. You approve every action before anything is sent. A built-in kill switch stops all autonomous operations instantly.
+Mail Agent reads your email, classifies it by priority, filters out noise, and drafts responses — all locally on your computer. Review mode is the default; you can opt into policy-checked automatic replies. A built-in kill switch stops all autonomous operations instantly.
 
 ### Features
 
@@ -211,9 +211,9 @@ Mail Agent calls the following external services **only when explicitly configur
 |---|---|
 | `approve` (default) | All replies require explicit human approval |
 | `auto_safe` | Short, routine replies (acknowledgments etc.) sent after delay window |
-| `auto_full` | All policy-passing replies sent after delay window |
+| `auto_full` | All replies that pass the hard safety policy are sent after the delay window |
 
-All autonomous sends go through a configurable delay window (`DELAY_SEND_SECONDS`, default 60s) during which the action can be cancelled. The kill switch cancels all pending drafts immediately.
+Enable automatic replies explicitly in Settings. With the personal local queue, connected mailboxes are processed every 60 seconds while the dashboard backend is running. Automatic sends still require the hard worth-sending policy, rate limits, and a 60-second cancellation window (`DELAY_SEND_SECONDS`). Urgent mail and sent replies appear in the dashboard notifications while it is open. The kill switch cancels pending sends and blocks further processing. Public demo mode never sends email.
 
 ---
 

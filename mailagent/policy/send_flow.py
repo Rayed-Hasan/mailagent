@@ -121,6 +121,7 @@ class SendFlow:
         # If database is available, save the draft with scheduled time
         if self.db:
             draft_id = await self.db.save_draft(draft)
+            draft.id = draft_id
             logger.info("Scheduling send for email %s at %s (draft=%s)", draft.email_id, send_time, draft_id)
         else:
             logger.info("Scheduling send for email %s at %s (no db)", draft.email_id, send_time)
@@ -138,8 +139,7 @@ class SendFlow:
             except Exception:
                 logger.exception("Error checking draft status for email %s", draft.email_id)
 
-        # Simulate delay (in production, this would be a background task)
-        await asyncio.sleep(min(self.delay_seconds, 1))  # Cap at 1 second for testing
+        await asyncio.sleep(self.delay_seconds)
 
         # Check again if cancelled
         if draft.email_id in self.cancelled_drafts:

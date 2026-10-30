@@ -6,6 +6,7 @@ const loadMoreButton = document.querySelector("#loadMoreButton");
 const connectButton = document.querySelector("#connectButton");
 const connectionStatus = document.querySelector("#connectionStatus");
 const detailDialog = document.querySelector("#emailDetail");
+const notificationState = { seen: new Set(), unread: new Set(), items: [] };
 
 const apiConfig = {
   baseUrl: new URLSearchParams(window.location.search).get("api")
@@ -275,15 +276,39 @@ function renderDraftsList(drafts) {
 
     const tags = document.createElement("div");
     tags.className = "mail-tags";
-    appendTag(tags, "Draft", "important-tag");
-    appendTag(tags, "Pending Review", "reply-tag");
+    if (draft.scheduled_send_at) {
+      appendTag(tags, "Auto-send scheduled", "important-tag");
+      appendTag(tags, "60-second undo window", "reply-tag");
+    } else {
+      appendTag(tags, "Draft", "important-tag");
+      appendTag(tags, "Pending Review", "reply-tag");
+    }
 
     body.append(meta, subject, preview, tags);
 
     const more = document.createElement("button");
     more.className = "more-button";
     more.type = "button";
-    more.textContent = "Review";
+    more.textContent = draft.scheduled_send_at ? "Cancel send" : "Review";
+    if (draft.scheduled_send_at && apiConfig.token) {
+      more.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        more.disabled = true;
+        try {
+          const response = await fetch(`${apiConfig.baseUrl}/api/drafts/${encodeURIComponent(draft.id)}/cancel`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiConfig.token}` },
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Could not cancel scheduled reply");
+          showToast("Scheduled reply cancelled");
+          fetchInbox();
+        } catch (error) {
+          showToast(error.message || "Could not cancel scheduled reply");
+          more.disabled = false;
+        }
+      });
+    }
     item.append(check, avatar, body, more);
 
     item.addEventListener("click", () => {
@@ -582,6 +607,35 @@ function showToast(message) {
   window.setTimeout(() => toast.classList.remove("show"), 3200);
 }
 
+async function refreshNotifications(initial = false) {
+  if (!apiConfig.token || inboxState.isDemoMode) return;
+  try {
+    const response = await fetch(`${apiConfig.baseUrl}/api/audit-log?limit=50`, {
+      headers: { Authorization: `Bearer ${apiConfig.token}` },
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    notificationState.items = data.audit_log || [];
+    const fresh = notificationState.items.filter((item) => !notificationState.seen.has(item.id));
+    if (!initial) {
+      for (const item of fresh) {
+        notificationState.unread.add(item.id);
+        const urgent = item.notification_type === "urgent_email";
+        const title = urgent ? "Urgent email needs attention" : "MailAgent sent a reply";
+        const body = `${item.subject || "Email"}${item.sender ? ` · ${item.sender}` : ""}`;
+        showToast(`${title}: ${body}`);
+        if (window.Notification?.permission === "granted") {
+          new Notification(title, { body, tag: item.id });
+        }
+      }
+    }
+    for (const item of notificationState.items) notificationState.seen.add(item.id);
+    document.querySelector("#notificationButton")?.classList.toggle("has-notification", notificationState.unread.size > 0);
+  } catch (_error) {
+    // Keep the dashboard usable when activity polling is temporarily unavailable.
+  }
+}
+
 function togglePalette(open) {
   if (!open && document.activeElement === paletteInput) paletteInput.blur();
   palette.classList.toggle("open", open);
@@ -729,9 +783,9 @@ async function loadAutoReplySetting() {
     if (!response.ok) throw new Error("Could not load setting");
     const setting = await response.json();
     button.dataset.enabled = String(setting.enabled);
-    button.textContent = setting.enabled ? "Disable automatic replies" : "Enable safe auto replies";
+    button.textContent = setting.enabled ? "Disable automatic replies" : "Enable fully automatic replies";
     status.textContent = setting.enabled
-      ? "Safe auto replies are on · only eligible routine messages can be sent"
+      ? "Fully automatic replies are on · policy checks, rate limits, kill switch, and 60-second undo still apply"
       : "Approval mode · replies stay as drafts until approved";
   } catch (_error) {
     status.textContent = "Could not load automatic-reply setting";
@@ -754,7 +808,7 @@ document.querySelector("#toggleAutoReply")?.addEventListener("click", async (eve
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || "Could not save setting");
     await loadAutoReplySetting();
-    showToast(enabled ? "Safe automatic replies enabled" : "Automatic replies disabled");
+    showToast(enabled ? "Fully automatic replies enabled" : "Automatic replies disabled");
   } catch (error) {
     showToast(error.message || "Could not save automatic-reply setting");
   } finally {
@@ -767,8 +821,15 @@ const searchBtn = document.querySelector("#searchButton");
 if (searchBtn) searchBtn.addEventListener("click", () => togglePalette(true));
 
 const notifBtn = document.querySelector("#notificationButton");
-if (notifBtn) notifBtn.addEventListener("click", () => {
-  showToast("Notifications: Mailbox is synced and operating in Approve Mode.");
+if (notifBtn) notifBtn.addEventListener("click", async () => {
+  if (window.Notification?.permission === "default") await window.Notification.requestPermission();
+  await refreshNotifications(true);
+  notificationState.unread.clear();
+  notifBtn.classList.remove("has-notification");
+  const latest = notificationState.items[0];
+  showToast(latest
+    ? `${latest.notification_type === "urgent_email" ? "Urgent email" : "Reply sent"}: ${latest.subject || "Email"}`
+    : "No urgent messages or automatic replies yet.");
 });
 
 const helpBtn = document.querySelector("#helpButton");
@@ -837,6 +898,8 @@ window.addEventListener("hashchange", () => handleNavigation(window.location.has
     await updateSidebarFromApi();
   } else if (apiConfig.baseUrl && apiConfig.token) {
     await fetchInbox();
+    await refreshNotifications(true);
+    window.setInterval(() => refreshNotifications(false), 15000);
   } else {
     setConnectionStatus("Connect an inbox to begin");
     setMailListState("Connect your inbox to load real messages.");

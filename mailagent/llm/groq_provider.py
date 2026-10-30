@@ -80,15 +80,30 @@ class GroqProvider(LLMProvider):
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
 
-        # Handle JSON mode via response_schema if provided
-        if response_schema:
-            # Use simpler JSON mode instead of strict schema for better compatibility
-            payload["response_format"] = {"type": "json_object"}
-        elif json_mode:
+        # GPT-OSS supports strict structured outputs. Prefer that over JSON
+        # Object Mode so an empty/invalid generation cannot silently break
+        # draft parsing. Other Groq models use JSON Object Mode as a fallback.
+        if response_schema is not None and model in {
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-120b",
+        }:
+            strict_schema = dict(response_schema)
+            strict_schema["additionalProperties"] = False
+            strict_schema["required"] = list(strict_schema.get("properties", {}).keys())
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "mailagent_response",
+                    "strict": True,
+                    "schema": strict_schema,
+                },
+            }
+            payload["reasoning_format"] = "hidden"
+        elif response_schema is not None or json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         # Handle tool calls if provided
-        elif tools:
+        if tools:
             payload["tools"] = [
                 {
                     "type": "function",

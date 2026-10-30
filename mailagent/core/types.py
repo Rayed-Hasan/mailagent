@@ -84,6 +84,7 @@ class ClassificationResult(BaseModel):
 
 class Draft(BaseModel):
     """Email draft"""
+    id: Optional[str] = None
     email_id: str
     classification_id: str
     content: str

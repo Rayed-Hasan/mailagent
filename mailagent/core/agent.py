@@ -27,6 +27,7 @@ from mailagent.policy.rate_limiter import RateLimiter
 from mailagent.core.config import settings
 from mailagent.llm.registry import ProviderRegistry, ModelSlot
 from mailagent.llm.claude_provider import ClaudeProvider
+from mailagent.llm.groq_provider import GroqProvider
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +62,10 @@ class EmailAgent:
         # Initialize storage backend if needed
         await self.db.initialize()
 
-        # Sending is opt-in and always limited by the existing AUTO_SAFE policy.
+        # Sending is opt-in and still requires every hard policy check to pass.
         enabled = await self.db.get_auto_reply_enabled(self.user_id)
         if not self._autonomy_mode_explicit:
-            self.autonomy_mode = AutonomyMode.AUTO_SAFE if enabled else AutonomyMode.APPROVE
+            self.autonomy_mode = AutonomyMode.AUTO_FULL if enabled else AutonomyMode.APPROVE
         self.send_flow.set_autonomy_mode(self.autonomy_mode)
 
         # Load user voice profile
@@ -109,6 +110,16 @@ class EmailAgent:
                     ModelSlot(role="drafting", provider="claude", model=model_drafting)
                 )
             # Additional providers (openai, google, ollama) can be added here
+
+        if settings.groq_api_key and not self.provider_registry.configured_slots():
+            provider = GroqProvider(api_key=settings.groq_api_key)
+            self.provider_registry.register(provider)
+            self.provider_registry.set_slot(
+                ModelSlot(role="classification", provider="groq", model=settings.groq_model)
+            )
+            self.provider_registry.set_slot(
+                ModelSlot(role="drafting", provider="groq", model=settings.groq_model)
+            )
 
     async def _load_provider(self, account: dict):
         """Load email provider for an account"""
@@ -220,6 +231,7 @@ class EmailAgent:
             "context": {
                 "prefilter_skip": prefilter_result.skip_model,
                 "prefilter_reason_code": prefilter_result.reason_code,
+                "priority_score": classification.priority_score,
             }
         })
 
@@ -368,7 +380,9 @@ class EmailAgent:
         # Process through send flow
         status, reason = await self.send_flow.process_draft(draft, classification.action)
         draft.status = status
-        draft_id = await self.db.save_draft(draft)
+        draft_id = draft.id or await self.db.save_draft(draft)
+        if status != DraftStatus.CANCELLED:
+            await self.db.update_draft_status(draft_id, status)
 
         # Log draft creation
         await self.db.log_audit({
@@ -381,59 +395,60 @@ class EmailAgent:
             "context": {"autonomy_mode": self.autonomy_mode.value}
         })
 
-        # If approved, send immediately (fully autonomous for hackathon)
+        # Send only after the configured delay and a final kill-switch check.
         if status == DraftStatus.APPROVED:
-            # Check kill switch only (demo mode allows sending for hackathon)
-            if await self.db.is_kill_switch_active():
+            if settings.public_demo_mode or await self.db.is_kill_switch_active():
                 await self.db.update_draft_status(draft_id, DraftStatus.CANCELLED)
-                logger.info("Automatic reply blocked by kill switch")
+                logger.info("Automatic reply blocked by demo mode or kill switch")
                 return
 
-            # Send the email directly instead of creating a draft
             try:
-                await provider.send_reply(
-                    to_message_id=email.message_id,
+                provider_draft_id = await provider.create_draft(
+                    to=email.sender_email,
                     subject=f"Re: {email.subject}",
-                    body=draft_content
+                    body=draft_content,
+                    in_reply_to=email.raw_headers.get("Message-ID") or email.in_reply_to,
+                    thread_id=email.thread_id,
+                    references=email.references,
                 )
-                draft.status = DraftStatus.SENT
-                draft.sent_at = datetime.now(timezone.utc)
-                await self.db.save_draft(draft)
-                self.send_flow.record_sent(email_id)
-                print(f"✓ SENT AUTOMATICALLY: {email.subject}")
-                logger.info("Sent automatic reply for email %s", email.subject)
-                await self.db.log_audit({
-                    "email_id": email_id,
-                    "draft_id": draft_id,
-                    "event_type": "email_sent",
-                    "action": classification.action,
-                    "reason": reason,
-                    "context": {
-                        "autonomy_mode": self.autonomy_mode.value,
-                        "confidence": classification.confidence,
-                        "category": classification.category.value
-                    }
-                })
             except Exception as exc:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
-                logger.error("Failed to send automatic reply for email %s: %s", email.subject, exc)
-                print(f"✗ FAILED TO SEND: {email.subject} - {exc}")
+                logger.warning("Provider draft creation failed (%s); reply remains pending", type(exc).__name__)
+                return
 
-            # Send the draft
+            if not provider_draft_id:
+                await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
+                logger.warning("Email provider did not create a draft; reply remains pending")
+                return
+
             try:
                 sent = await provider.send_reply(provider_draft_id)
             except Exception as exc:
                 sent = False
-                logger.warning("Gmail send failed (%s); reply remains pending", type(exc).__name__)
+                logger.warning("Provider send failed (%s); reply remains pending", type(exc).__name__)
 
-            if sent:
-                await self.db.update_draft_status(draft_id, DraftStatus.SENT)
-                self.rate_limiter.record_reply(account_id, email.thread_id)
-                self.send_flow.record_sent(email_id)  # Record for idempotency
-                print(f"Sent reply: {email.subject}")
-            else:
+            if not sent:
                 await self.db.update_draft_status(draft_id, DraftStatus.PENDING)
-                logger.warning("Gmail did not confirm the send; reply remains pending for review")
+                logger.warning("Provider did not confirm the send; reply remains pending")
+                return
+
+            await self.db.update_draft_status(draft_id, DraftStatus.SENT)
+            self.rate_limiter.record_reply(account_id, email.thread_id)
+            self.send_flow.record_sent(email_id)
+            await self.db.log_audit({
+                "email_id": email_id,
+                "classification_id": classification_id,
+                "draft_id": draft_id,
+                "event_type": "reply_sent",
+                "action": classification.action,
+                "reason": reason,
+                "context": {
+                    "autonomy_mode": self.autonomy_mode.value,
+                    "confidence": classification.confidence,
+                    "category": classification.category.value,
+                },
+            })
+            logger.info("Automatic reply sent for %s", email.subject)
 
     async def learn_voice_profile(self, account_id: str):
         """Learn user's voice profile from sent emails"""

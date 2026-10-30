@@ -5,6 +5,7 @@ FastAPI dashboard for monitoring and controls
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
@@ -19,6 +20,8 @@ logger = logging.getLogger("mailagent.dashboard")
 from mailagent.core.database import Database
 from mailagent.core.types import AutonomyMode, Draft, DraftStatus
 from mailagent.core.config import settings
+from mailagent.core.agent import EmailAgent
+from mailagent.core.local_queue import LocalTaskQueue
 from mailagent.dashboard.auth import require_dashboard_auth
 from mailagent.dashboard.rate_limiter import demo_rate_limiter, get_client_ip
 from mailagent.demo.demo_seeder import DemoSeeder
@@ -84,6 +87,30 @@ async def landing_video_poster():
 
 # Database instance
 db = Database(force_demo_mode=settings.public_demo_mode)
+local_queue: Optional[LocalTaskQueue] = None
+mailbox_processing_lock = asyncio.Lock()
+
+
+async def process_owner_mailboxes() -> None:
+    """Sync and process the configured owner's mailboxes on the local queue."""
+    user_id = settings.dashboard_user_id.strip()
+    if settings.public_demo_mode or not user_id or mailbox_processing_lock.locked():
+        return
+
+    async with mailbox_processing_lock:
+        agent = EmailAgent(user_id)
+        try:
+            await agent.initialize()
+            accounts = await agent.db.get_accounts_by_user(user_id)
+            for account in accounts:
+                if await agent.db.is_kill_switch_active():
+                    logger.warning("Mailbox automation paused by kill switch")
+                    break
+                await agent.process_account(account["id"])
+        except Exception:
+            logger.exception("Scheduled mailbox processing failed")
+        finally:
+            await agent.shutdown()
 
 
 # Real Gmail Provider instance for demo if connected
@@ -100,7 +127,7 @@ demo_mailbox_status: Dict[str, Any] = {
 
 @app.on_event("startup")
 async def initialize_database() -> None:
-    global demo_gmail_provider, demo_sync_service, demo_mailbox_status
+    global demo_gmail_provider, demo_sync_service, demo_mailbox_status, local_queue
     await db.initialize()
 
     # In public demo mode, check for owner-configured real Gmail mailbox
@@ -172,9 +199,24 @@ async def initialize_database() -> None:
         # from fabricating real mailbox contents. Seeding is only permitted via explicit test setup.
         logger.info("Production demo started without synthetic auto-seeding.")
 
+    if not settings.public_demo_mode and settings.task_queue_backend == "local" and settings.dashboard_user_id.strip():
+        local_queue = LocalTaskQueue(
+            db_path=settings.local_queue_db_path,
+            kill_switch_checker=db.is_kill_switch_active,
+        )
+        await local_queue.start()
+        if not local_queue.schedule_task(
+            "process-owner-mailboxes",
+            process_owner_mailboxes,
+            interval_seconds=60,
+        ):
+            logger.error("Could not schedule local mailbox processing")
+
 
 @app.on_event("shutdown")
 async def close_database() -> None:
+    if local_queue and local_queue.is_running():
+        await local_queue.stop()
     await db.close()
 
 
@@ -453,9 +495,9 @@ async def toggle_kill_switch(
 async def get_auto_reply_setting(user_id: str = Depends(require_dashboard_auth)):
     """Return the authenticated owner's automatic-reply setting."""
     if settings.public_demo_mode:
-        return {"enabled": True, "mode": "auto_safe", "demo_read_only": False}
+        return {"enabled": False, "mode": "approve", "demo_read_only": True}
     enabled = await db.get_auto_reply_enabled(user_id)
-    return {"enabled": enabled, "mode": "auto_safe" if enabled else "approve"}
+    return {"enabled": enabled, "mode": "auto_full" if enabled else "approve"}
 
 
 @app.post("/api/owner/auto-reply")
@@ -463,13 +505,13 @@ async def set_auto_reply_setting(
     request: AutoReplyRequest,
     user_id: str = Depends(require_dashboard_auth),
 ):
-    """Enable only conservative auto replies for the authenticated owner."""
+    """Opt the authenticated owner into policy-checked automatic replies."""
     if settings.public_demo_mode:
         raise HTTPException(status_code=403, detail="Automatic sending is disabled in the public demo")
     saved = await db.set_auto_reply_enabled(user_id, request.enabled)
     if not saved:
         raise HTTPException(status_code=500, detail="Could not save automatic-reply setting")
-    return {"enabled": request.enabled, "mode": "auto_safe" if request.enabled else "approve"}
+    return {"enabled": request.enabled, "mode": "auto_full" if request.enabled else "approve"}
 
 
 @app.get("/api/accounts")
@@ -881,10 +923,51 @@ async def get_audit_log(
             raise HTTPException(status_code=404, detail="Resource not found")
         log = await db.get_audit_log(email_id)
     else:
-        # Get recent audit log entries (would need to be implemented)
         log = []
+        accounts = await db.get_accounts_by_user(user_id)
+        for account in accounts:
+            emails = await db.get_emails_by_account(account["id"], limit=100)
+            for email in emails:
+                for entry in await db.get_audit_log(email["id"]):
+                    context = entry.get("context") or {}
+                    is_urgent = (
+                        entry.get("event_type") == "classification"
+                        and (
+                            entry.get("category") == "urgent"
+                            or int(context.get("priority_score", 0) or 0) >= 90
+                        )
+                    )
+                    if is_urgent or entry.get("event_type") == "reply_sent":
+                        log.append({
+                            **entry,
+                            "subject": email.get("subject", ""),
+                            "sender": email.get("sender", ""),
+                            "sender_email": email.get("sender_email", ""),
+                            "notification_type": "urgent_email" if is_urgent else "reply_sent",
+                        })
+        log.sort(key=lambda entry: entry.get("timestamp", ""), reverse=True)
+        log = log[:max(1, min(limit, 200))]
 
     return {"audit_log": log}
+
+
+@app.post("/api/drafts/{draft_id}/cancel")
+async def cancel_scheduled_draft(
+    draft_id: str,
+    user_id: str = Depends(require_dashboard_auth),
+):
+    """Cancel a pending reply during its undo window."""
+    draft = await db.get_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    account = await db.get_account_for_email(draft["email_id"])
+    if not account or account.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.get("status") != DraftStatus.PENDING.value:
+        raise HTTPException(status_code=409, detail="Draft is no longer cancellable")
+    if not await db.update_draft_status(draft_id, DraftStatus.CANCELLED):
+        raise HTTPException(status_code=409, detail="Could not cancel draft")
+    return {"draft_id": draft_id, "status": DraftStatus.CANCELLED.value}
 
 
 @app.get("/api/voice-profile")

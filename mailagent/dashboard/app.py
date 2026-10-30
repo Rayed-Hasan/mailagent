@@ -274,7 +274,7 @@ async def initialize_database() -> None:
     if settings.public_demo_mode:
         from mailagent.mail.sync_service import GmailSyncService
         from mailagent.providers.gmail_provider import GmailProvider
-        from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email, get_demo_user_id
+        from mailagent.demo.demo_data import get_demo_account_id, get_demo_account_email
 
         demo_sync_service = GmailSyncService(db)
 
